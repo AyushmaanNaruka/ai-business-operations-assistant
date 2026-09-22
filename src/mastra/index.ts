@@ -10,6 +10,7 @@ import {
   SensitiveDataFilter,
 } from '@mastra/observability';
 import { agent } from './agents/agent';
+import { dataAnalyst } from './agents/dataAnalyst';
 
 // `mastra dev` runs the bundled server with its cwd set to src/mastra/public, not the
 // project root, so a relative `file:` URL resolves to the wrong place. npm sets
@@ -31,7 +32,7 @@ export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  agents: { agent },
+  agents: { agent, dataAnalyst },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({

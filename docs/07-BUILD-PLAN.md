@@ -25,14 +25,14 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 
 ## Tuesday 23 September: structured data
 
-- [ ] M1 ingestion: type detection, DuckDB registration, profiling with quality warnings
-- [ ] M1 async: upload returns `pending`, status flips to `ready`
-- [ ] M1 table extraction from documents
-- [ ] M2 DuckDB session, SQL validator, `describe`, `query`, `computeStats`
-- [ ] Data Analyst agent with its four tools
-- [ ] `skills/campaign-analytics/SKILL.md` attached to it
-- [ ] M5 evidence ledger, `Evidence` and `Finding`
-- [ ] Tests for M1, M2, M5
+- [x] M1 ingestion: type detection, DuckDB registration, profiling with quality warnings
+- [x] M1 async: upload returns `pending`, status flips to `ready`
+- [ ] M1 table extraction from documents — this is PDF/DOCX table extraction, scoped to `docs/PROMPTBOOK.md` P3.2 (Phase 3, Wednesday), not one of P2.1-P2.7; left for Phase 3
+- [x] M2 DuckDB session, SQL validator, `describe`, `query`, `computeStats`
+- [x] Data Analyst agent with its four tools (plus a fifth, `record_evidence`; see D-16)
+- [x] `skills/campaign-analytics/SKILL.md` attached to it
+- [x] M5 evidence ledger, `Evidence` and `Finding`
+- [x] Tests for M1, M2, M5
 
 **Demonstrable:** upload the campaign spreadsheet, ask "which channel performed best", get a real number with the SQL that produced it.
 

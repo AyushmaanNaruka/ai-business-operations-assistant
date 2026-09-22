@@ -1,0 +1,12 @@
+export { closeSession, createSession, disableExternalAccess, registerFile } from './session';
+export type { DuckDBSession } from './session';
+export { validateSql } from './validateSql';
+export { query } from './query';
+export type { QueryOptions, QueryResult } from './query';
+export { describe } from './describe';
+export type { ColumnProfile, TableProfile } from './describe';
+export { detectQualityIssues } from './qualityWarnings';
+export { computeStats } from './computeStats';
+export type { SmallSampleRow, StatsOp, StatsResult } from './computeStats';
+export { toJsonSafeValue, rowToJsonSafe } from './values';
+export type { QueryValue } from './values';

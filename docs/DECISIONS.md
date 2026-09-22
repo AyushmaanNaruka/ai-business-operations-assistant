@@ -92,6 +92,48 @@ Date, one line of context
 **Because:** `puppeteer` is already the approved, locked-in choice for `renderPdf` in `docs/06-RESEARCH-STACK.md` section 2.7 and listed as optional in `10-SETUP.md`; using it now instead of a new dependency keeps the dependency set exactly as specified, and the HTML template this script builds is the same shape `renderPdf.ts` will reuse in Phase 6.
 **Cost:** Chromium's download (~300MB) now happens during Phase 1 setup instead of Phase 6; `esbuild` and `puppeteer` postinstall scripts both needed explicit `npm approve-scripts` approval, which anyone cloning the repo will hit too and should be noted in `10-SETUP.md` before submission.
 
+## D-12 Added vitest.config.ts to resolve the `@/*` alias for value imports
+22 Sep 2026, P2.1, `src/modules/sources/detectType.ts` importing `ok`/`fail` from the reliability module.
+**Chose:** A `vitest.config.ts` with `resolve.alias` mapping `@` to `src`, mirroring tsconfig's `paths`.
+**Over:** Using relative imports (`../reliability`) for cross-module value imports instead.
+**Because:** `@/types` appeared to work in Phase 1 only because those were `import type` statements, which esbuild elides before module resolution runs; the first real value import across module boundaries (`@/modules/reliability`) failed at runtime with "Cannot find package". Aliasing in Vitest keeps the `@/*` convention AGENTS.md's directory map implies usable everywhere, not just in type positions.
+**Cost:** One more config file; anyone adding a new top-level bundler entry point (not just `mastra dev`/`vitest`) needs the same alias wired for it too.
+
+## D-13 query() locks external access on first use instead of requiring a manual step
+22 Sep 2026, P2.2, `src/modules/analysis/session.ts` and `query.ts`.
+**Chose:** `query()`, the only agent-facing execution path, calls `disableExternalAccess()` itself the first time it runs on a session, if nobody already did. `registerFile` refuses to run once a session is locked, since `enable_external_access` cannot be re-enabled once off.
+**Over:** Requiring the ingestion pipeline to remember to call `disableExternalAccess()` after "the last file" before handing the session to the agent.
+**Because:** "The last file" has no clean definition when uploads can arrive at any point in a conversation; a manual step is a footgun one missed call away from leaving external access open while untrusted, model-generated SQL runs. Locking automatically on first query makes the invariant true by construction: no query ever executes with file/network access enabled.
+**Cost:** A file uploaded after the first query has already run in a session cannot be registered into that same DuckDB instance (registerFile now fails cleanly with QUERY_INVALID rather than crashing). Scenario A's demo flow (upload everything, then ask questions) is unaffected; a genuinely mid-conversation late upload would need a fresh session or a Node-side row-insert path instead of registerFile, which is out of scope for this phase.
+
+## D-14 Evidence ledger persists via the raw @libsql/client driver, not @mastra/libsql
+22 Sep 2026, P2.6, `src/modules/evidence/ledger.ts`.
+**Chose:** Added `@libsql/client` (already present transitively through `@mastra/libsql`) as a direct dependency, and used its plain `createClient`/`execute` API to read and write the ledger's `evidence`/`findings`/`ledger_counters` tables, each row a JSON blob keyed by id.
+**Over:** Using `@mastra/libsql`'s `LibSQLStore`, or giving the evidence module a Mastra storage instance passed in from `src/mastra/`.
+**Because:** AGENTS.md requires `src/modules/*` to stay free of Mastra imports so it is testable without an API key or a running Mastra instance; `@libsql/client` is the underlying, framework-agnostic SQLite-compatible driver, not a Mastra package, so it satisfies that rule while still writing to the one LibSQL file docs/06-RESEARCH-STACK.md commits memory, vectors and evidence to. A JSON-blob-per-row schema avoids hand-mapping every `Evidence`/`Finding` field to a column for a store whose access pattern is "fetch by id list" and "scan for a topic match", not relational querying.
+**Cost:** No SQL-level querying of evidence/finding fields (e.g. "all evidence with confidence=low") without loading and filtering in Node; acceptable at the scale one conversation's ledger reaches. `gatherFor` does a full table scan over findings, fine at this scale but would need an index or a real query if findings ever numbered in the thousands.
+
+## D-15 A single process-wide DuckDB session stands in for per-conversation sessions
+22 Sep 2026, P2.7, `src/mastra/tools/analysis.ts`.
+**Chose:** One shared DuckDB session, source registry and evidence ledger, created lazily on the Data Analyst's first tool call, auto-loading `samples/campaigns.xlsx` if present.
+**Over:** Building real per-conversation session scoping now.
+**Because:** M8 (the session manifest, Phase 5) and the chat UI's real upload flow (Phase 7) do not exist yet, but P2.7 needs something queryable in Mastra Studio today to verify the agent end to end. A shared session is the smallest thing that makes `describe_dataset` -> `run_sql` -> `record_evidence` demonstrably work without building session infrastructure out of order.
+**Cost:** Not multi-tenant and not conversation-scoped: every Studio session currently shares one DuckDB instance and one evidence ledger. This is explicitly temporary and must be replaced when M8 lands, not extended.
+
+## D-16 Added a fifth tool, record_evidence, beyond the four named in 04-MODULES.md
+22 Sep 2026, P2.7, `src/mastra/tools/analysis.ts` and `dataAnalyst.ts`.
+**Chose:** A `record_evidence` tool wrapping `EvidenceLedger.addEvidence`, which the agent's instructions require it to call for every number before citing it.
+**Over:** Relying on instructions alone for "every result becomes an Evidence entry" (the literal wording of P2.7's rule 4), with no mechanical enforcement.
+**Because:** `run_sql` and `compute_stats` return whole result sets, not single facts, so auto-logging every tool call as one Evidence entry does not fit Evidence's one-fact shape; only the agent knows which specific number from a result set is worth citing. The real `SpecialistTask`/`SpecialistResult` contract (Phase 5, P5.2) will likely absorb this into a structured return value instead of a tool call, but that contract does not exist yet, and D-05 already established that instructions alone are not enforcement for this system.
+**Cost:** A fifth tool not listed in the architecture doc's table for M7; worth reconciling with contracts.ts in Phase 5 rather than carrying both mechanisms forward.
+
+## D-17 Grounding audit fixes: exception safety, evidence re-verification, init retry
+22 Sep 2026, P2.7 wrap-up, following a code-reviewer subagent audit against AGENTS.md's five rules.
+**Chose:** Three fixes. (1) Extended try/catch in `session.ts` `registerFile` and `describe.ts` to cover every DuckDB call, not just the first; added a `safe()` wrapper around every Mastra tool's `execute` in `src/mastra/tools/analysis.ts`, and an outer try/catch around `ingest.ts`'s fire-and-forget background task, so nothing throws past a tool or a background promise. (2) `record_evidence` now re-runs its own `sql` against DuckDB and uses the actually-returned value when the query yields exactly one row and one column, instead of trusting the model's transcription of an earlier result. (3) `getRuntime()`'s cached session promise resets to `null` on rejection instead of permanently caching a rejected promise.
+**Over:** Leaving these as found and noting them as future work.
+**Because:** The audit found concrete, non-hypothetical throw paths (an odd column type, a locked db file, a file deleted mid-upload) that would reach the agent loop and violate rule 5 directly, one path where a rejected init promise would permanently break every tool call for the rest of a live demo, and one path where a model could stamp an unverified number as high-confidence "computed" evidence, which is exactly the estimation rule 1 exists to prevent.
+**Cost:** `record_evidence` now runs its SQL twice (once via `run_sql`, once again inside `record_evidence`) for the common single-scalar case; acceptable for correctness at this scale. Multi-row/multi-column evidence claims still cannot be mechanically re-verified and rely on the agent's instructions, a known gap to close when Phase 5's `SpecialistResult` contract exists.
+
 ---
 
 <!-- Append new decisions below as you make them. -->
