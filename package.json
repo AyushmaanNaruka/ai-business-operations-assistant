@@ -1,0 +1,49 @@
+{
+  "name": "business-operations-assistant",
+  "version": "0.1.0",
+  "description": "AI Business Operations Assistant: upload documents or a company website, then chat, analyze, research, and generate business deliverables.",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.76",
+    "@ai-sdk/groq": "^4.0.46",
+    "@duckdb/node-api": "^1.5.5-r.5",
+    "@mastra/ai-sdk": "^1.10.4",
+    "@mastra/core": "^1.68.0",
+    "@mastra/duckdb": "latest",
+    "@mastra/libsql": "^1.23.1",
+    "@mastra/memory": "^1.31.0",
+    "@mastra/observability": "latest",
+    "@mastra/rag": "^2.6.4",
+    "ai": "^7.0.109",
+    "csv-parse": "^7.0.2",
+    "docx": "^9.7.1",
+    "exceljs": "^4.4.0",
+    "gpt-tokenizer": "^4.0.0",
+    "mammoth": "^1.12.3",
+    "pptxgenjs": "^4.0.1",
+    "quickchart-js": "^4.0.0",
+    "simple-statistics": "^7.12.0",
+    "unpdf": "^1.8.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "mastra": "latest",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.1"
+  }
+}
