@@ -16,8 +16,9 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 - [x] All shared types from `05-DATA-MODEL.md` in `src/types/`
 - [x] `src/modules/reliability/` first, because everything else returns `ToolResult`
 - [x] One trivial agent answering in Mastra Studio
-- [ ] **Sample dataset built** (see `08-DEMO-SCENARIOS.md`), with real messiness in it
-- [ ] Git initialised, first commit, `.env` populated from `.env.example`
+- [x] **Sample dataset built** (see `08-DEMO-SCENARIOS.md`), with real messiness in it
+- [x] Git initialised, first commit
+- [ ] `.env` populated from `.env.example` — blocked: the agent's sandbox denies writing `.env` directly; run `cp .env.example .env` and fill in your API keys by hand
 
 **Demonstrable:** chat with an agent at localhost:4111.
 

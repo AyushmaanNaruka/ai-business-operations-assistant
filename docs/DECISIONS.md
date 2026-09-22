@@ -85,6 +85,13 @@ Date, one line of context
 **Because:** AGENTS.md's "Out of scope" list and architecture decision D-02 both rule out arbitrary code execution or sandboxes; the scaffolded agent's `LocalSandbox` directly contradicted that. `schedule-tools.ts` also `throw`s inside `execute()` instead of returning a `ToolResult`, violating rule 5, and recurring schedules are not part of the nine specified modules.
 **Cost:** None of the scaffold's demo capabilities (weather, stock price, scheduling) survive as a smoke test; Studio now only proves the agent responds, which is all P1.3 asks for.
 
+## D-11 Installed puppeteer in Phase 1 to build the sample brief PDF
+22 Sep 2026, P1.5, generating samples/northwind-brief.pdf.
+**Chose:** Install `puppeteer` now and use it via `scripts/make-brief-pdf.ts` (a hand-rolled markdown-to-HTML converter for the brief's small, fixed markdown subset, then `page.pdf()`), rather than a new markdown-to-PDF dependency.
+**Over:** Waiting until Phase 6's `renderPdf.ts`, or pulling in a dedicated markdown-to-PDF package for this one file.
+**Because:** `puppeteer` is already the approved, locked-in choice for `renderPdf` in `docs/06-RESEARCH-STACK.md` section 2.7 and listed as optional in `10-SETUP.md`; using it now instead of a new dependency keeps the dependency set exactly as specified, and the HTML template this script builds is the same shape `renderPdf.ts` will reuse in Phase 6.
+**Cost:** Chromium's download (~300MB) now happens during Phase 1 setup instead of Phase 6; `esbuild` and `puppeteer` postinstall scripts both needed explicit `npm approve-scripts` approval, which anyone cloning the repo will hit too and should be noted in `10-SETUP.md` before submission.
+
 ---
 
 <!-- Append new decisions below as you make them. -->

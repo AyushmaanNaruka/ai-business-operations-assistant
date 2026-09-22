@@ -36,6 +36,7 @@
     "gpt-tokenizer": "^4.0.0",
     "mammoth": "^1.12.3",
     "pptxgenjs": "^4.0.1",
+    "puppeteer": "^25.11.0",
     "quickchart-js": "^4.0.0",
     "simple-statistics": "^7.12.0",
     "unpdf": "^1.8.1",
@@ -47,5 +48,9 @@
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^5.0.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "puppeteer@25.11.0": true
   }
 }
