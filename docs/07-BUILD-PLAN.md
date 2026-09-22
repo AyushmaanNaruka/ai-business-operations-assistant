@@ -40,14 +40,15 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 
 ## Wednesday 24 September: documents and research
 
-- [ ] M3 markdown conversion with inline page markers, for PDF and DOCX
-- [ ] M3 token counting and routing
-- [ ] M3 full context path and `get_document`
-- [ ] M3 indexed path: chunk, embed, LibSQLVector, filtered query tool, rerank
-- [ ] Document agent with its three tools
-- [ ] M4 search, read page, crawl, with fallbacks
-- [ ] Research agent, `skills/company-research/SKILL.md`
-- [ ] Tests for M3 and M4
+- [x] M3 markdown conversion with inline page markers, for PDF and DOCX
+- [x] M1 table extraction from documents (P3.2: pdf-parse getTable() for PDF, mammoth HTML tables for Word, registered into DuckDB alongside the prose)
+- [x] M3 token counting and routing
+- [x] M3 full context path and `get_document`
+- [x] M3 indexed path: chunk, embed, LibSQLVector, filtered query tool, rerank
+- [x] Document agent with its three tools
+- [x] M4 search, read page, crawl, with fallbacks
+- [x] Research agent, `skills/company-research/SKILL.md`
+- [x] Tests for M3 and M4
 
 **Demonstrable:** ask a question answered from a PDF and a company website together, with citations.
 

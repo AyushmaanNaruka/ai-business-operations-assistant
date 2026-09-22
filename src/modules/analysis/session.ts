@@ -80,20 +80,8 @@ export async function registerFile(
 
   try {
     await session.connection.run(`CREATE TABLE ${quotedTable} AS SELECT * FROM ${reader(escapedPath)}`);
-
-    const summary = await session.connection.runAndReadAll(`SUMMARIZE ${quotedTable}`);
-    const summaryRows = summary.getRowObjectsJson() as Record<string, string | number | null>[];
-
-    const columns = summaryRows.map((row) => ({
-      name: String(row.column_name),
-      type: String(row.column_type),
-      nullRate: Number(row.null_percentage ?? 0) / 100,
-    }));
-
-    const countResult = await session.connection.runAndReadAll(`SELECT COUNT(*) AS n FROM ${quotedTable}`);
-    const rowCount = Number(countResult.getRowObjectsJson()[0]?.n ?? 0);
-
-    return ok({ tableName, rowCount, columns, qualityWarnings: [] });
+    const summary = await summarizeTable(session, tableName);
+    return ok(summary);
   } catch (err) {
     return fail('PARSE_FAILED', `Could not register "${path}" as a table: ${(err as Error).message}`, {
       recoverable: false,
@@ -101,6 +89,30 @@ export async function registerFile(
   }
 }
 
-function quoteIdent(name: string): string {
+/**
+ * Reads DuckDB's own `SUMMARIZE` and row count for an already-created table.
+ * Shared by `registerFile` (M1 tabular ingestion) and `registerRows` (M1
+ * document table extraction, P3.2): both need the same column/null-rate
+ * shape, and only DuckDB's own accounting is trusted for it (rule 1).
+ */
+export async function summarizeTable(session: DuckDBSession, tableName: string): Promise<TableRef> {
+  const quotedTable = quoteIdent(tableName);
+
+  const summary = await session.connection.runAndReadAll(`SUMMARIZE ${quotedTable}`);
+  const summaryRows = summary.getRowObjectsJson() as Record<string, string | number | null>[];
+
+  const columns = summaryRows.map((row) => ({
+    name: String(row.column_name),
+    type: String(row.column_type),
+    nullRate: Number(row.null_percentage ?? 0) / 100,
+  }));
+
+  const countResult = await session.connection.runAndReadAll(`SELECT COUNT(*) AS n FROM ${quotedTable}`);
+  const rowCount = Number(countResult.getRowObjectsJson()[0]?.n ?? 0);
+
+  return { tableName, rowCount, columns, qualityWarnings: [] };
+}
+
+export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }

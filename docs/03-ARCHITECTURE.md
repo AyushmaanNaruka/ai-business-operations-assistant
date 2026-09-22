@@ -590,12 +590,14 @@ agents/
 
 ```ts
 export const MODELS = {
-  ROUTER:  'groq/llama-3.3-70b-versatile',   // fast, cheap, classification
+  ROUTER:  'groq/openai/gpt-oss-120b',       // fast, cheap, classification
   ANALYST: 'google/gemini-2.5-flash',        // SQL and reasoning
   WRITER:  'google/gemini-2.5-flash',        // artifact authoring
-  RERANK:  'groq/llama-3.1-8b-instant',      // re-ranking scorer
+  RERANK:  'groq/openai/gpt-oss-20b',        // re-ranking scorer
 }
 ```
+
+(Updated 23 Sep 2026, P3.4: the originally planned `llama-3.3-70b-versatile` and `llama-3.1-8b-instant` are not in this project's live Groq account's model catalog. See docs/DECISIONS.md D-24.)
 
 Naming tiers rather than hardcoding models means swapping provider is one file, and it makes the cost argument concrete instead of rhetorical.
 

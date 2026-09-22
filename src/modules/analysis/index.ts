@@ -1,5 +1,7 @@
-export { closeSession, createSession, disableExternalAccess, registerFile } from './session';
+export { closeSession, createSession, disableExternalAccess, registerFile, summarizeTable } from './session';
 export type { DuckDBSession } from './session';
+export { registerRows } from './registerRows';
+export type { RowTable } from './registerRows';
 export { validateSql } from './validateSql';
 export { query } from './query';
 export type { QueryOptions, QueryResult } from './query';

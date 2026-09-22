@@ -255,12 +255,14 @@ contracts.ts       SpecialistTask, SpecialistResult
 
 ```ts
 export const MODELS = {
-  ROUTER:  'groq/llama-3.3-70b-versatile',
+  ROUTER:  'groq/openai/gpt-oss-120b',
   ANALYST: 'google/gemini-2.5-flash',
   WRITER:  'google/gemini-2.5-flash',
-  RERANK:  'groq/llama-3.1-8b-instant',
+  RERANK:  'groq/openai/gpt-oss-20b',
 }
 ```
+
+(Updated 23 Sep 2026: see docs/DECISIONS.md D-24 — the originally listed Groq models are not in this project's live account catalog.)
 
 ---
 

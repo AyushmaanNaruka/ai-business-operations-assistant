@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { query, closeSession, createSession, type DuckDBSession } from '@/modules/analysis';
+import { getDocument } from '@/modules/documents';
+import * as research from '@/modules/research';
 import * as contentHash from './contentHash';
 import { ingest } from './ingest';
 import { createSourceRegistry, type SourceRegistry } from './registry';
@@ -91,17 +93,6 @@ describe('ingest (tabular)', () => {
     }
   });
 
-  it('marks a non-tabular file as failed rather than crashing, and names why', async () => {
-    session = await createSession('ing4');
-    registry = createSourceRegistry();
-
-    const source = ingest(session, registry, { path: join(SAMPLES, 'northwind-brief.pdf') });
-    const finished = await waitForStatus(registry, source.id);
-
-    expect(finished.status).toBe('failed');
-    expect(finished.error?.code).toBe('UNSUPPORTED_FORMAT');
-  });
-
   it('an identical re-upload reuses the already-registered table instead of registering it twice', async () => {
     session = await createSession('ing5');
     registry = createSourceRegistry();
@@ -116,4 +107,203 @@ describe('ingest (tabular)', () => {
     expect(secondReady.tables![0]!.tableName).toBe(firstReady.tables![0]!.tableName);
     expect(secondReady.tables![0]!.rowCount).toBe(firstReady.tables![0]!.rowCount);
   });
+});
+
+describe('ingest (document)', () => {
+  let session: DuckDBSession;
+  let registry: SourceRegistry;
+
+  afterEach(() => {
+    if (session) closeSession(session);
+  });
+
+  it('ingests the sample brief: routes full, extracts its tables, and getDocument returns the markdown with markers', async () => {
+    session = await createSession('ingdoc1');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { path: join(SAMPLES, 'northwind-brief.pdf') });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('ready');
+    expect(finished.kind).toBe('pdf');
+    expect(finished.doc).toBeDefined();
+    expect(finished.doc!.mode).toBe('full');
+    expect(finished.doc!.pageCount).toBeGreaterThan(0);
+    expect(finished.summary).toContain('document + tabular');
+
+    // The pricing and quarterly-target tables extracted alongside the prose.
+    expect(finished.tables).toBeDefined();
+    expect(finished.tables!.length).toBeGreaterThanOrEqual(2);
+    const pricingTable = finished.tables!.find((t) => t.columns.some((c) => c.name === 'plan'));
+    expect(pricingTable).toBeDefined();
+    const sum = await query(session, `SELECT SUM(monthly_price) AS total FROM "${pricingTable!.tableName}"`);
+    expect(sum.ok).toBe(true);
+    if (sum.ok) expect(sum.data.rows[0]!.total).toBe(4098);
+
+    const doc = await getDocument(source.id);
+    expect(doc.ok).toBe(true);
+    if (doc.ok) {
+      expect(doc.data).toContain('<!-- source: northwind-brief.pdf | page: 1 -->');
+      expect(doc.data).toContain('Northwind Analytics builds a product analytics platform');
+    }
+  });
+
+  it('ingests a txt file with a single source marker and no tables', async () => {
+    session = await createSession('ingdoc2');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { path: join(SAMPLES, 'research-requirements.txt') });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('ready');
+    expect(finished.kind).toBe('txt');
+    expect(finished.doc).toBeDefined();
+    expect(finished.tables).toBeUndefined();
+    expect(finished.summary).toContain('document');
+    expect(finished.summary).not.toContain('tabular');
+
+    // research-requirements.txt reads as six stakeholder questions; they
+    // must be extracted as a proposal, never acted on (AGENTS.md rule 4).
+    expect(finished.proposedTasks).toHaveLength(6);
+  });
+
+  it('marks an encrypted-style parse failure as failed, not pending forever', async () => {
+    session = await createSession('ingdoc3');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { path: join(SAMPLES, 'does-not-exist.pdf') });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('failed');
+    expect(finished.error?.code).toBe('PARSE_FAILED');
+  });
+});
+
+describe('ingest (web)', () => {
+  let session: DuckDBSession;
+  let registry: SourceRegistry;
+
+  afterEach(() => {
+    if (session) closeSession(session);
+    vi.restoreAllMocks();
+  });
+
+  it('reads a URL through readPage and becomes a ready web Source whose markdown carries the URL and retrievedAt (docs/03-ARCHITECTURE.md 3.6: one pipeline, two entry points)', async () => {
+    vi.spyOn(research, 'readPage').mockResolvedValue({
+      ok: true,
+      data: {
+        markdown: 'Acme builds widgets for mid-market manufacturers across North America.',
+        retrievedAt: '2026-09-23T12:00:00.000Z',
+      },
+    });
+
+    session = await createSession('ingweb1');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { url: 'https://acme.com/about' });
+    expect(source.status).toBe('pending');
+    expect(source.kind).toBe('web');
+    expect(source.origin).toBe('url');
+    expect(source.name).toBe('acme.com/about');
+
+    const finished = await waitForStatus(registry, source.id);
+    expect(finished.status).toBe('ready');
+    expect(finished.kind).toBe('web');
+    expect(finished.origin).toBe('url');
+    expect(finished.doc).toBeDefined();
+    expect(finished.doc!.mode).toBe('full');
+    expect(finished.doc!.pageCount).toBeUndefined(); // a web source has no page concept
+    expect(finished.tables).toBeUndefined(); // no local file, so no table extraction step runs
+
+    const doc = await getDocument(source.id);
+    expect(doc.ok).toBe(true);
+    if (doc.ok) {
+      expect(doc.data).toContain('https://acme.com/about');
+      expect(doc.data).toContain('2026-09-23T12:00:00.000Z');
+      expect(doc.data).toContain('Acme builds widgets for mid-market manufacturers');
+    }
+  });
+
+  it('marks the source failed, not stuck pending, when readPage itself fails (e.g. PAGE_BLOCKED)', async () => {
+    vi.spyOn(research, 'readPage').mockResolvedValue({
+      ok: false,
+      error: { code: 'PAGE_BLOCKED', message: 'The site returned HTTP 403 for this URL.', recoverable: false },
+    });
+
+    session = await createSession('ingweb2');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { url: 'https://blocked.example.com' });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('failed');
+    expect(finished.error?.code).toBe('PAGE_BLOCKED');
+  });
+
+  it('detects a requirements-shaped web page into proposedTasks, same as an uploaded document', async () => {
+    vi.spyOn(research, 'readPage').mockResolvedValue({
+      ok: true,
+      data: {
+        markdown: [
+          '1. What is the target market size?',
+          '2. Who are the main competitors?',
+          '3. Please describe the pricing model.',
+        ].join('\n'),
+        retrievedAt: '2026-09-23T12:00:00.000Z',
+      },
+    });
+
+    session = await createSession('ingweb3');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { url: 'https://acme.com/rfp' });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('ready');
+    expect(finished.proposedTasks).toHaveLength(3);
+  });
+});
+
+// Runs against the real network only when live keys are present, matching
+// this project's convention for gating live tests (docs/PROMPTBOOK.md P4.2:
+// "ingest a live URL, assert it becomes a Source with kind 'web' and status
+// ready"). Jina Reader itself needs no key, so EXA_API_KEY presence here is
+// only a proxy for "this environment has live network access configured".
+describe('ingest (web, live)', () => {
+  let session: DuckDBSession;
+  let registry: SourceRegistry;
+  let hasLiveNetwork = false;
+  try {
+    process.loadEnvFile();
+  } catch {
+    // no .env file to load; process.env may already carry the keys (CI, shell export)
+  }
+  hasLiveNetwork = Boolean(process.env.EXA_API_KEY);
+
+  afterEach(() => {
+    if (session) closeSession(session);
+  });
+
+  it.skipIf(!hasLiveNetwork)(
+    'ingests a real, stable URL end to end into a ready, searchable web Source',
+    async () => {
+      session = await createSession('ingweb-live');
+      registry = createSourceRegistry();
+
+      const source = ingest(session, registry, { url: 'https://stripe.com' });
+      const finished = await waitForStatus(registry, source.id, 20000);
+
+      expect(finished.status).toBe('ready');
+      expect(finished.kind).toBe('web');
+      expect(finished.origin).toBe('url');
+
+      const doc = await getDocument(source.id);
+      expect(doc.ok).toBe(true);
+      if (doc.ok) {
+        expect(doc.data).toContain('https://stripe.com');
+        expect(doc.data).toMatch(/retrieved: \d{4}-\d{2}-\d{2}T/);
+      }
+    },
+    25000,
+  );
 });

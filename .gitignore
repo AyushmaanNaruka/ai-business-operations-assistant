@@ -8,6 +8,7 @@ build/
 .mastra/
 data/*.db
 data/*.db-*
+data/documents/
 storage/
 uploads/
 generated/

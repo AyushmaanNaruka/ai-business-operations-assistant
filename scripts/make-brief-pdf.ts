@@ -47,7 +47,7 @@ function markdownToHtml(markdown: string): string {
         .slice(1, -1)
         .split('|')
         .map((c) => c.trim());
-      html.push('<table><thead><tr>');
+      html.push('<div class="tablewrap"><table><thead><tr>');
       for (const cell of headerCells) html.push(`<th>${inline(cell)}</th>`);
       html.push('</tr></thead><tbody>');
       i += 2;
@@ -62,7 +62,7 @@ function markdownToHtml(markdown: string): string {
         html.push('</tr>');
         i++;
       }
-      html.push('</tbody></table>');
+      html.push('</tbody></table></div>');
       continue;
     }
 
@@ -101,10 +101,12 @@ const PAGE_STYLE = `
   h1 + p { color: #555; font-style: italic; margin-top: 0; }
   h2 { font-size: 14.5pt; margin-top: 28px; border-left: 4px solid #2c5f7c; padding-left: 10px; }
   p { text-align: justify; }
-  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 10.5pt; }
-  th, td { border: 1px solid #999; padding: 6px 8px; text-align: left; }
+  .tablewrap { position: relative; margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 10.5pt; }
+  th, td { border: none; padding: 6px 8px; text-align: left; }
   th { background: #2c5f7c; color: white; }
   tr:nth-child(even) td { background: #f2f6f8; }
+  .tablewrap svg { position: absolute; inset: 0; pointer-events: none; }
   ol { padding-left: 22px; }
   li { margin-bottom: 6px; }
 `;
@@ -121,6 +123,45 @@ async function main() {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
+
+    // Puppeteer paints CSS table borders (`border: 1px solid`) as filled
+    // rectangles in the PDF's content stream, not stroked vector paths, so
+    // pdf-parse's getTable() (which only scans stroke operators, since it
+    // walks each page's operator list and skips anything that is not
+    // `OPS.stroke`) finds nothing. Drawing the grid as an SVG overlay with a
+    // real `stroke` produces genuine vector line/rectangle operators that
+    // getTable() can detect, which the P3.2 table-extraction path depends on
+    // (docs/03-ARCHITECTURE.md Part 9, gap A).
+    await page.evaluate(() => {
+      for (const wrap of Array.from(document.querySelectorAll<HTMLElement>('.tablewrap'))) {
+        const table = wrap.querySelector('table');
+        if (!table) continue;
+        const wrapRect = wrap.getBoundingClientRect();
+        const rows = Array.from(table.querySelectorAll('tr'));
+        const rowYs = rows.map((row) => row.getBoundingClientRect().top - wrapRect.top);
+        const lastRow = rows[rows.length - 1]!;
+        rowYs.push(lastRow.getBoundingClientRect().bottom - wrapRect.top);
+
+        const firstRowCells = Array.from(rows[0]!.children) as HTMLElement[];
+        const colXs = firstRowCells.map((cell) => cell.getBoundingClientRect().left - wrapRect.left);
+        const lastCell = firstRowCells[firstRowCells.length - 1]!;
+        colXs.push(lastCell.getBoundingClientRect().right - wrapRect.left);
+
+        const width = wrapRect.width;
+        const height = wrapRect.height;
+        const lines: string[] = [];
+        for (const y of rowYs) lines.push(`<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="#999" stroke-width="1" />`);
+        for (const x of colXs) lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${height}" stroke="#999" stroke-width="1" />`);
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', String(width));
+        svg.setAttribute('height', String(height));
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        svg.innerHTML = lines.join('');
+        wrap.appendChild(svg);
+      }
+    });
+
     await page.pdf({
       path: pdfPath,
       format: 'A4',

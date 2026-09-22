@@ -306,9 +306,9 @@ It also demonstrates the thing their brief closes with: *"A focused, well-engine
 
 | Need | Choice | Cost |
 |---|---|---|
-| Search | **Exa** ($10 of credit every month, no card required) with **Tavily** as backup (1,000 credits/month, and Tavily is free for students) | $0 |
+| Search | **Exa** via `exa-js` ($10 of credit every month, no card required) with **Tavily** as backup (a plain `fetch` to its REST API, no SDK; 1,000 credits/month, and Tavily is free for students) | $0 |
 | Read a page | **Jina AI Reader** (`https://r.jina.ai/<url>`) | $0, no API key, 20 requests/min. Returns clean Markdown, handles JavaScript rendered pages |
-| Crawl a whole company site | **Firecrawl** (1,000 credits/month free, no card) | $0 |
+| Crawl a whole company site | **Firecrawl** REST API (a plain `fetch`, no SDK; 1,000 credits/month free, no card) | $0 |
 | Local fallback | `@mozilla/readability` + `jsdom` | $0 |
 
 Jina Reader is the standout: a plain `fetch` to a URL prefix, no SDK, no key, and it returns model ready Markdown. Use it as the default page reader and keep Firecrawl for multi page company profiling.
