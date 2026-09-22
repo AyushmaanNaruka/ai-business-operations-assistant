@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { Mastra } from '@mastra/core/mastra';
 import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from '@mastra/duckdb';
@@ -9,20 +10,33 @@ import {
   SensitiveDataFilter,
 } from '@mastra/observability';
 import { agent } from './agents/agent';
-import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
+
+// `mastra dev` runs the bundled server with its cwd set to src/mastra/public, not the
+// project root, so a relative `file:` URL resolves to the wrong place. npm sets
+// INIT_CWD to the directory `npm run dev` was invoked from, which is the project root;
+// fall back to process.cwd() for other entry points (tests, `mastra build` output).
+const projectRoot = process.env.INIT_CWD || process.cwd();
+
+function resolveDatabaseUrl(raw: string): string {
+  if (!raw.startsWith('file:')) return raw; // remote libsql:// / Turso URLs pass through untouched
+  const filePath = raw.slice('file:'.length);
+  const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath);
+  return isAbsolute ? raw : `file:${resolve(projectRoot, filePath)}`;
+}
+
+// One LibSQL file holds memory, vectors and the evidence ledger, per docs/06-RESEARCH-STACK.md.
+const DATABASE_URL = resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db');
 
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
   agents: { agent },
-  tools: { startScheduleTool, stopScheduleTool },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({
       id: 'mastra-storage',
-      url: process.env.TURSO_DATABASE_URL || 'file:./mastra.db',
-      authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+      url: DATABASE_URL,
     }),
     domains: {
       observability: await new DuckDBStore().getStore('observability'),

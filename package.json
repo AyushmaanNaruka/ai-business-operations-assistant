@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "mastra dev",
     "build": "mastra build",
-    "start": "mastra start"
+    "start": "mastra start",
+    "test": "vitest run",
+    "samples": "tsx scripts/make-samples.ts"
   },
   "keywords": [],
   "author": "",

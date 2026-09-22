@@ -71,6 +71,20 @@ Date, one line of context
 **Because:** The docs assumed an older CLI behavior; the merge-from-temp-dir approach gets an identical result without blocking on a tool bug. Removing the observability packages now would also require rewriting `index.ts`'s storage wiring before Phase 1 needs to touch it anyway.
 **Cost:** Two unlisted deps (`@mastra/duckdb`, `@mastra/observability`) and their `MastraCompositeStore`/`DuckDBStore` wiring sit in `index.ts` until Phase 1 replaces the example agent; if we don't want Mastra's built-in observability storage on DuckDB, that's a manual removal later, not automatic.
 
+## D-09 LibSQL DATABASE_URL resolved against INIT_CWD, not process.cwd()
+22 Sep 2026, wiring LibSQLStore in src/mastra/index.ts for P1.3.
+**Chose:** Resolve a relative `file:` DATABASE_URL against `process.env.INIT_CWD` (npm's original invocation directory), falling back to `process.cwd()`.
+**Over:** Passing `process.env.DATABASE_URL` straight through to `LibSQLStore`, as `.env.example` and the build plan describe it.
+**Because:** `mastra dev` runs the bundled server with its working directory set to `src/mastra/public`, not the project root, so a bare relative path silently opened (or tried to create) the database in the wrong folder and crashed with `ConnectionFailed`. `INIT_CWD` is the one thing npm guarantees points back at the project root regardless of where the bundler chdirs to.
+**Cost:** One extra path-resolution helper in `index.ts`; anyone running the bundled output outside of `npm run` (a raw `node .mastra/output/index.mjs`) needs `INIT_CWD` set manually or an absolute `DATABASE_URL`.
+
+## D-10 Replaced the scaffolded placeholder agent and dropped schedule-tools.ts
+22 Sep 2026, P1.3, fitting the scaffold's example agent to this project.
+**Chose:** A minimal `Agent` with no tools beyond memory, using `MODELS.ANALYST`. Deleted `src/mastra/tools/schedule-tools.ts` entirely.
+**Over:** Keeping the scaffold's generated agent, which used a `LocalSandbox` workspace and a `start_schedule`/`stop_schedule` tool pair.
+**Because:** AGENTS.md's "Out of scope" list and architecture decision D-02 both rule out arbitrary code execution or sandboxes; the scaffolded agent's `LocalSandbox` directly contradicted that. `schedule-tools.ts` also `throw`s inside `execute()` instead of returning a `ToolResult`, violating rule 5, and recurring schedules are not part of the nine specified modules.
+**Cost:** None of the scaffold's demo capabilities (weather, stock price, scheduling) survive as a smoke test; Studio now only proves the agent responds, which is all P1.3 asks for.
+
 ---
 
 <!-- Append new decisions below as you make them. -->

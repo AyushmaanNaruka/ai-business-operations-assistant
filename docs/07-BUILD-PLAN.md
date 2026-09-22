@@ -11,11 +11,11 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 ## Monday 22 September: foundation
 
 - [x] Scaffold with `npm create mastra@latest` (see `10-SETUP.md`)
-- [ ] `src/mastra/models.ts` with the four tiers
-- [ ] LibSQL storage wired, one file at `data/app.db`
-- [ ] All shared types from `05-DATA-MODEL.md` in `src/types/`
-- [ ] `src/modules/reliability/` first, because everything else returns `ToolResult`
-- [ ] One trivial agent answering in Mastra Studio
+- [x] `src/mastra/models.ts` with the four tiers
+- [x] LibSQL storage wired, one file at `data/app.db`
+- [x] All shared types from `05-DATA-MODEL.md` in `src/types/`
+- [x] `src/modules/reliability/` first, because everything else returns `ToolResult`
+- [x] One trivial agent answering in Mastra Studio
 - [ ] **Sample dataset built** (see `08-DEMO-SCENARIOS.md`), with real messiness in it
 - [ ] Git initialised, first commit, `.env` populated from `.env.example`
 
