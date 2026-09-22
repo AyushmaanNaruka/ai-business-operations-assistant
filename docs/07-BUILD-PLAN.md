@@ -17,8 +17,7 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 - [x] `src/modules/reliability/` first, because everything else returns `ToolResult`
 - [x] One trivial agent answering in Mastra Studio
 - [x] **Sample dataset built** (see `08-DEMO-SCENARIOS.md`), with real messiness in it
-- [x] Git initialised, first commit
-- [ ] `.env` populated from `.env.example` — blocked: the agent's sandbox denies writing `.env` directly; run `cp .env.example .env` and fill in your API keys by hand
+- [x] Git initialised, first commit, `.env` populated from `.env.example` (confirmed live: the placeholder agent answered through `MODELS.ANALYST` using the Google key)
 
 **Demonstrable:** chat with an agent at localhost:4111.
 
