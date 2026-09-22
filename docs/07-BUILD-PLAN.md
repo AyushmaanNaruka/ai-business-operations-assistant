@@ -10,7 +10,7 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 
 ## Monday 22 September: foundation
 
-- [ ] Scaffold with `npm create mastra@latest` (see `10-SETUP.md`)
+- [x] Scaffold with `npm create mastra@latest` (see `10-SETUP.md`)
 - [ ] `src/mastra/models.ts` with the four tiers
 - [ ] LibSQL storage wired, one file at `data/app.db`
 - [ ] All shared types from `05-DATA-MODEL.md` in `src/types/`

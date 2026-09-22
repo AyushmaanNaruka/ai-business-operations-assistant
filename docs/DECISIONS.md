@@ -64,6 +64,13 @@ Date, one line of context
 **Because:** Executing instructions found in user supplied files is a prompt injection path. The brief mentions "a set of research requirements" as an input, so this case will occur.
 **Cost:** One extra confirmation step in a flow that could have been automatic.
 
+## D-08 Scaffold via a temp sibling directory, kept the generated observability stack
+22 Sep 2026, running `npm create mastra@latest` against this repo.
+**Chose:** `create-mastra@1.31.0` (published 22 Sep 2026) rejects `.` as a project name outright, so scaffolded into a throwaway sibling folder with `--llm google --no-install --no-git`, then merged `package.json`, `tsconfig.json`, `src/mastra/index.ts`, `agents/agent.ts`, `tools/schedule-tools.ts` into this repo by hand, keeping our own `AGENTS.md`/`README.md`/`.env.example`. Left `@mastra/duckdb` and `@mastra/observability` (not in `10-SETUP.md`'s list) in `package.json` rather than stripping them, since the scaffold's `index.ts` uses them for its default trace storage and P0.2 only mandates removing `xlsx`/`danfojs-node`.
+**Over:** Waiting on upstream to fix `.` support, or hand-authoring the scaffold files from scratch.
+**Because:** The docs assumed an older CLI behavior; the merge-from-temp-dir approach gets an identical result without blocking on a tool bug. Removing the observability packages now would also require rewriting `index.ts`'s storage wiring before Phase 1 needs to touch it anyway.
+**Cost:** Two unlisted deps (`@mastra/duckdb`, `@mastra/observability`) and their `MastraCompositeStore`/`DuckDBStore` wiring sit in `index.ts` until Phase 1 replaces the example agent; if we don't want Mastra's built-in observability storage on DuckDB, that's a manual removal later, not automatic.
+
 ---
 
 <!-- Append new decisions below as you make them. -->
