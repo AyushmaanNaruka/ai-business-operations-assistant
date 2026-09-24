@@ -11,7 +11,7 @@ A summary document is **not a short report**. It is a different artifact with a 
 
 ## Structure
 
-- **One line** stating the situation
+- **One line** stating the situation, followed by the date the underlying data is current as of
 - **Three findings**, one short paragraph each, most important first
 - **One recommendation**, with its expected effect
 - **What we could not determine**, if anything

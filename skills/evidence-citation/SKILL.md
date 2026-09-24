@@ -19,6 +19,8 @@ These rules are inherited by every other skill in this project. They are not sty
 
 5. **Label inferences as inferences.** A claim assembled across sources is not a fact from either of them. Mark it.
 
+6. **Planning artifacts may state a labeled assumption instead of a number with no evidence.** This is the one narrow exception to rule 1. A campaign plan needing a CPA for a channel with no history may state one, provided the output marks it as an assumption in the same place it appears, not as a fact. This never applies to a report, summary, or answer describing what already happened; it only ever describes a forward-looking plan for something that has not happened yet.
+
 6. **Attach the method to important numbers.** For a computed figure, the query that produced it is available in the evidence entry. Reference it where a reader would reasonably want to check.
 
 ## Citation format

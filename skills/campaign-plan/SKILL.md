@@ -11,6 +11,7 @@ A plan is judged on whether someone could execute it on Monday. Everything else 
 
 ## Required sections
 
+0. **TL;DR** one line above the objective: what this plan does, for whom, by when. A reader who stops here should already know whether to keep reading
 1. **Objective** one sentence, with a number and a date. "Generate 120 mid-market MQLs by 31 December" not "increase awareness"
 2. **Why this, now** the evidence that led here, citing findings
 3. **Audience** who specifically, and what we know about them from the sources
@@ -25,7 +26,7 @@ A plan is judged on whether someone could execute it on Monday. Everything else 
 
 **The channel mix must be justified by the data.** "Sixty percent to email because email converts at twice the blended average on a tenth of the spend [F1, E1, E4]" is a plan. "A balanced mix across channels" is a placeholder.
 
-**Every number in the budget traces to something.** A CPA assumption cites the historical CPA it came from. If there is no history for a channel, say the number is an assumption and mark it.
+**Every number in the budget traces to something.** A CPA assumption cites the historical CPA it came from. If there is no history for a channel, say the number is an assumption and mark it as such (see `evidence-citation` rule 6, the one exception to "never state a number with no evidence ID").
 
 **Timeline in weeks, not months.** Months hide the fact that nothing has been sequenced.
 

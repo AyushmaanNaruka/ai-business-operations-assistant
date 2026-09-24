@@ -78,17 +78,17 @@ nothing.
 
 ## Friday 26 September: artifacts
 
-- [ ] All ten `SKILL.md` files written **first**
-- [ ] Zod schemas for each artifact type
-- [ ] `renderXlsx` with the five sheet convention and live formulas
-- [ ] `renderPptx` with native charts and speaker notes
-- [ ] Artifact workflow, eight steps, with validation and suspend on repeated failure
-- [ ] Chart rendering via QuickChart
-- [ ] Artifact versioning
-- [ ] `renderDocx` and `renderPdf` if time allows
-- [ ] Tests: each house rule rejects a bad plan, each renderer produces an openable file
+- [x] All ten `SKILL.md` files written **first** (P6.1: reviewed and lightly revised — five house-rule additions, one evidence-citation/campaign-plan contradiction resolved with a new rule 6)
+- [x] Zod schemas for each artifact type (P6.2: `src/modules/artifacts/schemas/*`, plus `validatePlan`'s schema-agnostic house-rule checker)
+- [x] `renderXlsx` with the five sheet convention and live formulas (P6.3)
+- [x] `renderPptx` with native charts and speaker notes (P6.4)
+- [x] Artifact workflow, eight steps, with validation and suspend on repeated failure (P6.6: six graph nodes per D-40's documented steps-4/5 merge and step-6 precheck simplification; suspend-after-two-attempts verified by test)
+- [x] Chart rendering via QuickChart (P6.5: `renderChart.ts`, used by `renderDocx`; `renderXlsx` embeds its own inline; `renderPdf` uses client-side Chart.js instead)
+- [x] Artifact versioning (P6.6: `src/modules/artifacts/store.ts`, a revision keeps every earlier version downloadable)
+- [x] `renderDocx` and `renderPdf` (P6.5: both built, not cut)
+- [x] Tests: each house rule rejects a bad plan, each renderer produces an openable file (verified at the real ZIP/XML/PNG byte level throughout, not just structurally)
 
-**Demonstrable:** generate a deck and a workbook from the conversation, then revise one.
+**Demonstrable:** generate a deck and a workbook from the conversation, then revise one. Wired end to end via `request_artifact` (P6.7): multiple artifacts in one request run in parallel, an unlisted type routes to `generic-document` instead of a refusal, and every completed result carries its real `downloadUrl`. Known gap, tracked in D-41: workbook Data sheets ship empty until Phase 7 makes a live queryable dataset reachable from the orchestrator (it has no domain tools of its own by design).
 
 ---
 

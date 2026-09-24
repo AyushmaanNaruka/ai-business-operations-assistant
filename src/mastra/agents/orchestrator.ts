@@ -3,12 +3,14 @@ import { Agent } from '@mastra/core/agent';
 import { createTool } from '@mastra/core/tools';
 import { Memory } from '@mastra/memory';
 import { z } from 'zod';
-import type { Evidence, MetricKey, SessionManifest, SpecialistResult, SpecialistTask, ToolResult } from '@/types';
-import { addOpenGap, renderManifest, resolveReference, type ReferenceResolution } from '@/modules/session';
+import type { Artifact, ArtifactKind, Evidence, MetricKey, SessionManifest, SpecialistResult, SpecialistTask, ToolResult } from '@/types';
+import { addArtifact, addOpenGap, renderManifest, resolveReference, type ReferenceResolution } from '@/modules/session';
+import { ArtifactPlanKindSchema, type ArtifactPlanKind } from '@/modules/artifacts/schemas';
 import { detectConflicts, openLedger, type Conflict, type EvidenceLedger } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
 import { MODELS } from '../models';
 import { openManifestStore, type ManifestStore } from '../session/manifestStore';
+import { artifactWorkflow } from '../workflows/artifact';
 import { buildTask, delegate, EvidenceSchema, SpecialistResultSchema } from './contracts';
 import { dataAnalyst } from './dataAnalyst';
 import { documentAgent } from './documentAgent';
@@ -260,14 +262,16 @@ export function decideAction(intent: Intent, sourceIds: string[], manifest: Sess
   }
 
   if (intent === 'artifact') {
-    // Stub for P5.3: Phase 6 builds the real artifact workflow. Defer cleanly rather
-    // than fabricate a file or a plan for one.
+    // P6.7: handle_request classifies intent but never builds artifacts itself.
+    // request_artifact (called directly by the orchestrator agent, per its own
+    // instructions below) is the real path for an artifact request. Reaching this
+    // branch at all means handle_request was called for an artifact-shaped request
+    // instead, so this says so plainly rather than fabricating a file or a plan for one.
     return {
       kind: 'artifact_stub',
       message:
-        'Artifact generation is not wired up yet in this build (Phase 6 adds it). ' +
-        'I have noted the request rather than inventing a file. Ask me a data, document ' +
-        'or research question, or a recommendation, in the meantime.',
+        'Artifact generation happens through request_artifact directly; handle_request does not build files ' +
+        'itself. If this is a genuine artifact request, call request_artifact instead.',
     };
   }
 
@@ -838,6 +842,11 @@ const conflictSchema: z.ZodType<Conflict> = z.object({
   b: EvidenceSchema,
 });
 
+// src/types/artifact.ts owns ArtifactKind but exports no Zod schema for it that this
+// file can reach without dragging the workflow module's own local mirror in; mirrored
+// here the same way metricKeySchema/conflictSchema above mirror types they do not own.
+const artifactKindSchema: z.ZodType<ArtifactKind> = z.enum(['xlsx', 'pptx', 'docx', 'pdf']);
+
 export const handleRequestTool = createTool({
   id: 'handle_request',
   description:
@@ -958,31 +967,175 @@ export const resolveReferenceTool = createTool({
     })(),
 });
 
+// P6.7: one entry per requested artifact, discriminated on how the workflow run for it
+// came out. "completed" carries the real Artifact.downloadUrl/version and a one-line
+// description (never invented by this file: workbook's description names the known
+// dataRows:[] limitation honestly rather than silently shipping an empty Data sheet).
+// "suspended" surfaces authorAndValidate's actual errors after two failed attempts
+// (P6.6), never a generic message. "failed" covers anything else (a non-success,
+// non-suspended run status, or an unexpected throw), reported the same way any other
+// specialist failure is, per rule 6: a gap, not a silently swallowed request.
+const artifactResultItemSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('completed'),
+    title: z.string(),
+    kind: artifactKindSchema,
+    downloadUrl: z.string(),
+    version: z.number(),
+    description: z.string(),
+  }),
+  z.object({
+    status: z.literal('suspended'),
+    title: z.string(),
+    errors: z.array(z.string()),
+  }),
+  z.object({
+    status: z.literal('failed'),
+    title: z.string(),
+    message: z.string(),
+  }),
+]);
+
+function artifactDescription(artifact: Artifact): string {
+  const base = `${artifact.title}, a ${artifact.kind} ${artifact.skillUsed} (version ${artifact.version}).`;
+  // Known, deliberate limitation (docs/DECISIONS.md D-41): the orchestrator has no
+  // domain tools of its own, so it cannot query DuckDB for a workbook's real dataset
+  // rows yet; every run through this tool passes dataRows: [] to the workflow. Say so
+  // honestly rather than shipping a silently empty Data sheet without comment.
+  if (artifact.kind === 'xlsx') {
+    return `${base} Its Data sheet's rows were not attached this run; re-run once the underlying source is directly queryable.`;
+  }
+  return base;
+}
+
 export const requestArtifactTool = createTool({
   id: 'request_artifact',
   description:
-    'Records a request for a generated deliverable (deck, spreadsheet, doc). STUB for P5.3: the real artifact ' +
-    'workflow (resolve kind, gather evidence, author a typed plan, validate, render) is Phase 6\'s job. This ' +
-    'never renders a file; it always reports the request as not yet available. Call this for "artifact" intent ' +
-    'instead of inventing a download link or writing prose into a fake file.',
+    'Builds one or more generated deliverables (report, summary, workbook, deck, plan, brief, or generic ' +
+    'document) by running the real artifact workflow (resolve kind, gather evidence, author a typed plan, ' +
+    'validate, render, store) once per requested file, in parallel. Call this directly for "artifact" intent, ' +
+    'never via handle_request: building files is not something handle_request or any specialist does. Pass one ' +
+    'entry per distinct file the user asked for in the same call, not one call per file. Every "completed" ' +
+    'result carries a real downloadUrl and a one line description to relay verbatim, never invented. A ' +
+    '"suspended" result means the plan failed its own quality checks twice and was never rendered: relay the ' +
+    'actual errors. A "failed" result is a gap like any other (rule 6).',
   inputSchema: z.object({
-    kind: z.enum(['xlsx', 'pptx', 'docx', 'pdf']),
-    title: z.string(),
-    findingIds: z.array(z.string()).optional(),
+    objective: z.string().describe('One sentence: what these artifacts should accomplish for the user.'),
+    findingIds: z
+      .array(z.string())
+      .optional()
+      .describe('Findings to ground the artifact(s) in. Omit to use every finding currently in the session manifest.'),
+    artifacts: z
+      .array(
+        z.object({
+          kind: ArtifactPlanKindSchema.describe(
+            "report | summary | workbook | deck | plan | brief | generic. Pick the closest of the first six; use 'generic' for anything that does not fit (a battlecard, a QBR agenda, a stakeholder update, ...) rather than refusing.",
+          ),
+          format: artifactKindSchema
+            .optional()
+            .describe(
+              'Only set this if the user explicitly named a file format (e.g. "as a PDF", "an Excel file"). Omit to use the sensible default: workbook is always xlsx, deck is always pptx, everything else defaults to docx unless the user named pdf.',
+            ),
+          title: z.string(),
+          revisionOf: z
+            .string()
+            .optional()
+            .describe('An existing artifact id already in the manifest, if this revises a previously generated file rather than creating a new one.'),
+        }),
+      )
+      .min(1)
+      .describe(
+        'One entry per distinct file the user asked for. Two file requests in one turn ("an Excel file and a presentation") means two entries here, run in parallel, not two separate tool calls.',
+      ),
   }),
-  outputSchema: toolResultSchema(z.object({ status: z.literal('not_available'), message: z.string() })),
-  execute: async (inputData: { kind: string; title: string; findingIds?: string[] }) =>
+  outputSchema: toolResultSchema(
+    z.object({
+      results: z.array(artifactResultItemSchema),
+      progressEvents: z.array(progressEventSchema),
+    }),
+  ),
+  execute: async (inputData: {
+    objective: string;
+    findingIds?: string[];
+    artifacts: { kind: ArtifactPlanKind; format?: ArtifactKind; title: string; revisionOf?: string }[];
+  }) =>
     safe(async () => {
-      return {
-        ok: true as const,
-        data: {
-          status: 'not_available' as const,
-          message:
-            `Artifact generation is not wired up yet (Phase 6 adds the real workflow). ` +
-            `Noted: a ${inputData.kind} titled "${inputData.title}"` +
-            (inputData.findingIds && inputData.findingIds.length > 0 ? ` grounded in ${inputData.findingIds.join(', ')}.` : '.'),
-        },
-      };
+      const store = await getManifestStore();
+      const manifest = await store.loadManifest(DEFAULT_SESSION_ID);
+      const findingIds = inputData.findingIds ?? manifest.findings.map((f) => f.id);
+
+      const progressEvents: ProgressEvent[] = [];
+      const completedArtifacts: Artifact[] = [];
+
+      // P6.7: one workflow run per requested artifact, genuinely concurrent
+      // (Promise.all over per-item try/catches, never a sequential for-loop and never
+      // a bare Promise.all that could reject as a whole over one bad item).
+      const results = await Promise.all(
+        inputData.artifacts.map(async (item) => {
+          progressEvents.push({ kind: 'workflow_step', label: `Building "${item.title}"`, at: defaultNow() });
+          try {
+            const run = await artifactWorkflow.createRun();
+            const result = await run.start({
+              inputData: {
+                planKind: item.kind,
+                format: item.format,
+                title: item.title,
+                objective: inputData.objective,
+                findingIds,
+                // Known limitation (docs/DECISIONS.md D-41): no live wiring from this
+                // orchestrator to a queryable dataset yet, so this is always [].
+                dataRows: [],
+                revisionOf: item.revisionOf,
+              },
+            });
+
+            if (result.status === 'success') {
+              const artifact = result.result.artifact;
+              completedArtifacts.push(artifact);
+              return {
+                status: 'completed' as const,
+                title: artifact.title,
+                kind: artifact.kind,
+                downloadUrl: artifact.downloadUrl,
+                version: artifact.version,
+                description: artifactDescription(artifact),
+              };
+            }
+
+            if (result.status === 'suspended') {
+              const payload = result.suspendPayload as { authorAndValidate?: { errors?: string[] } } | undefined;
+              return {
+                status: 'suspended' as const,
+                title: item.title,
+                errors: payload?.authorAndValidate?.errors ?? [],
+              };
+            }
+
+            return {
+              status: 'failed' as const,
+              title: item.title,
+              message: `Artifact generation did not complete (workflow status: ${result.status}).`,
+            };
+          } catch (err) {
+            return { status: 'failed' as const, title: item.title, message: `Unexpected error: ${(err as Error).message}` };
+          } finally {
+            progressEvents.push({ kind: 'workflow_step', label: `Finished "${item.title}"`, at: defaultNow() });
+          }
+        }),
+      );
+
+      // Same "only save if something actually changed" discipline handleRequestTool
+      // already uses for gaps: every successfully completed artifact is folded into
+      // the manifest so later turns and resolve_reference can see it.
+      let nextManifest = manifest;
+      for (const artifact of completedArtifacts) {
+        nextManifest = addArtifact(nextManifest, artifact);
+      }
+      if (nextManifest !== manifest) {
+        await store.saveManifest(DEFAULT_SESSION_ID, nextManifest);
+      }
+
+      return { ok: true as const, data: { results, progressEvents } };
     })(),
 });
 
@@ -1088,9 +1241,22 @@ impact, and write the answer in your own words, citing ids as you go. The specia
 produce meaning.
 
 For "unsupported", relay handle_request's message about as it comes back: it already states what you cannot do
-and what you can do instead, in the shape "I cannot do X, here is what I can do". For "artifact", call
-request_artifact with the kind and title the user described (never handle_request), then relay its message: it
-is a stub until Phase 6, so it never invents a download link.
+and what you can do instead, in the shape "I cannot do X, here is what I can do".
+
+For "artifact", call request_artifact directly, never handle_request: building a file is not something
+handle_request or any specialist does. Give it one entry in its "artifacts" array per distinct file the user
+asked for, in the SAME call, never one call per file: "Put the campaign metrics into an Excel file and create a
+presentation for the client" is two entries in one call, {kind: "workbook", title: ...} and {kind: "deck", title:
+...}, run in parallel. Pick the closest of report/summary/workbook/deck/plan/brief; when nothing fits (a
+battlecard, a QBR agenda, a stakeholder update, ...) use "generic" rather than refusing. Only set "format" when
+the user actually named a file format ("as a PDF", "an Excel file"); otherwise leave request_artifact to its own
+sensible defaults. For every "completed" entry it returns, relay the exact "downloadUrl" and "description" you
+were given, verbatim: never invent or guess a link. For a "suspended" entry, tell the user plainly that the file
+could not be produced because it did not pass its own quality checks after two attempts, and surface the actual
+"errors" it returned (or a faithful summary of them), never a generic "something went wrong". For a "failed"
+entry, report it as a gap the same way any other specialist failure is reported (rule 6); never present a broken
+artifact as if it succeeded. When artifact generation is one part of a larger, multi-part request, fold it into
+your stated plan and progress narration the same way a multi-specialist delegation is (rule 8).
 `.trim(),
   model: MODELS.ANALYST,
   memory: new Memory(),

@@ -7,6 +7,10 @@ description: How to structure a business Excel workbook so it is usable, not jus
 
 Inherits `evidence-citation`.
 
+## Summary sheet header
+
+Before the headline numbers: the workbook title, the client or company name, the date range the data covers, and the date the workbook was generated. A reviewer opening the file cold should not have to ask what this is or how current it is.
+
 ## The five sheet convention
 
 | Sheet | Contains |
@@ -29,7 +33,7 @@ This is the single clearest proof the file was constructed rather than transcrib
 - Frozen header row on Data
 - Column widths set, no truncated headers
 - No merged cells anywhere; they break filtering and every downstream tool
-- A chart image on Summary only where it adds something. Excel charts must be embedded as images, no JavaScript library writes native ones
+- A chart image on Summary only where it adds something. Excel charts must be embedded as images, no JavaScript library writes native ones. This differs from `client-presentation`, where charts must be native; the two renderers use different libraries with different capabilities, not different standards
 
 ## Recommendations sheet shape
 
