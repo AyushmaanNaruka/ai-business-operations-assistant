@@ -1,8 +1,15 @@
+import { resolve } from 'node:path';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import type { ToolResult } from '@/types';
+import { openLedger, type EvidenceLedger } from '@/modules/evidence';
 import { crawlSite, createUrlCache, readPageCached, search, type UrlCache } from '@/modules/research';
 import { fail } from '@/modules/reliability';
+
+// mastra dev runs with its cwd set to src/mastra/public, not the project root
+// (see docs/DECISIONS.md D-09); INIT_CWD is npm's original invocation
+// directory and the one thing that reliably points back at the project root.
+const PROJECT_ROOT = process.env.INIT_CWD || process.cwd();
 
 const toolResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
   z.discriminatedUnion('ok', [
@@ -47,6 +54,27 @@ let cache: UrlCache | undefined;
 function getUrlCache(): UrlCache {
   if (!cache) cache = createUrlCache();
   return cache;
+}
+
+function resolveDatabaseUrl(raw: string): string {
+  if (!raw.startsWith('file:')) return raw;
+  const filePath = raw.slice('file:'.length);
+  const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath);
+  return isAbsolute ? raw : `file:${resolve(PROJECT_ROOT, filePath)}`;
+}
+
+// Same evidence ledger file tools/analysis.ts and tools/documents.ts open (D-15
+// stand-in): one ledger per process, so a P5.2 evidence id is unique and
+// resolvable regardless of which specialist recorded it.
+let ledgerPromise: Promise<EvidenceLedger> | null = null;
+function getLedger(): Promise<EvidenceLedger> {
+  if (!ledgerPromise) {
+    ledgerPromise = openLedger(resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db')).catch((err: unknown) => {
+      ledgerPromise = null;
+      throw err;
+    });
+  }
+  return ledgerPromise;
 }
 
 export const webSearchTool = createTool({
@@ -112,5 +140,52 @@ export const crawlSiteTool = createTool({
       const result = await crawlSite(inputData.domain, inputData.maxPages);
       if (!result.ok) return result;
       return { ok: true as const, data: { pages: result.data } };
+    })(),
+});
+
+const evidenceOutputSchema = z.object({
+  id: z.string(),
+  claim: z.string(),
+  kind: z.enum(['computed', 'document', 'web']),
+  sourceId: z.string(),
+  sourceName: z.string(),
+  locator: z.string(),
+  method: z.string().optional(),
+  value: z.union([z.number(), z.string()]).optional(),
+  confidence: z.enum(['high', 'medium', 'low']),
+  retrievedAt: z.string().optional(),
+  metric: z
+    .object({ name: z.string(), scope: z.string(), unit: z.enum(['ratio', 'currency', 'count', 'duration']) })
+    .optional(),
+  createdAt: z.string(),
+});
+
+export const recordEvidenceTool = createTool({
+  id: 'record_evidence',
+  description:
+    'Records one fact read from a web page in the evidence ledger: the claim, the exact URL, and the ' +
+    'retrievedAt timestamp read_page or crawl_site returned for that page. Web evidence is always confidence ' +
+    '"medium" (assigned by rule, never passed in). Call this for every claim that will appear in your answer, ' +
+    'then use the returned evidence object as-is in your structured output; do not retype or paraphrase it.',
+  inputSchema: z.object({
+    claim: z.string().describe('Human readable statement of the fact, e.g. "Acme prices Self-Serve at $19/user/month"'),
+    url: z.string().describe('The exact page URL this claim came from.'),
+    retrievedAt: z.string().describe('The retrievedAt timestamp read_page or crawl_site returned for this URL.'),
+    value: z.union([z.number(), z.string()]).optional().describe('A quoted number or short value, if the claim is one.'),
+  }),
+  outputSchema: toolResultSchema(z.object({ evidence: evidenceOutputSchema })),
+  execute: async (inputData: { claim: string; url: string; retrievedAt: string; value?: number | string }) =>
+    safe(async () => {
+      const ledger = await getLedger();
+      const evidence = await ledger.addEvidence({
+        claim: inputData.claim,
+        kind: 'web',
+        sourceId: inputData.url,
+        sourceName: inputData.url,
+        locator: inputData.url,
+        retrievedAt: inputData.retrievedAt,
+        ...(inputData.value !== undefined ? { value: inputData.value } : {}),
+      });
+      return { ok: true as const, data: { evidence } };
     })(),
 });

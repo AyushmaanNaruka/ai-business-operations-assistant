@@ -218,6 +218,76 @@ Date, one line of context
 **Because:** docs/06-RESEARCH-STACK.md's own stated reasoning for layered fallbacks is "a demo that dies on a rate limit is a bad demo" — a transient Exa hiccup that isn't specifically quota-shaped would otherwise sink a search the user is watching live, for no benefit. `SEARCH_QUOTA` is the only `ErrorCode` this system has for "no search result is available right now," so it is also what a genuine total failure of both providers reports, regardless of whether the underlying cause was two quota hits, two network failures, or missing keys.
 **Cost:** A one-off, recoverable Exa error and Exa being genuinely out of quota are no longer distinguishable to the caller; both look identical (a successful Tavily fallback, or `SEARCH_QUOTA` if Tavily also fails). Acceptable since the agent's only correct response to either is the same: keep going on Tavily, or report the gap.
 
+## D-30 ReferenceResolution matches findings and artifacts, not only sources
+24 Sep 2026, P5.1, `src/modules/session/reference.ts`.
+**Chose:** `ReferenceResolution`'s `match` variant covers `sourceId | findingId | artifactId`, beyond the prompt's own sketch (which only showed a source match).
+**Over:** Sticking to the literal sketch and leaving "this finding" / "the deck" unresolved.
+**Because:** M8's own stated job ("now compare it with the other one") and its own examples ("the deck") plainly need findings and artifacts resolved the same way sources are; the manifest already holds all three, so limiting resolution to one of them would leave an obvious, easy-to-hit gap.
+**Cost:** Three match shapes for callers to switch on instead of one; acceptable, since every caller already has to handle `ambiguous`/`none` regardless.
+
+## D-31 manifestStore hand-rolls a LibSQL table instead of using Mastra's working-memory API
+24 Sep 2026, P5.1, `src/mastra/session/manifestStore.ts`.
+**Chose:** A small `session_manifest` table via `@libsql/client` directly, mirroring `openLedger`'s own pattern against the same `DATABASE_URL`.
+**Over:** `@mastra/memory`'s `Memory.getWorkingMemory`/`updateWorkingMemory`, which exists and is documented for exactly this kind of per-thread state.
+**Because:** that API only works bound to a live `Memory` instance and a threadId/resourceId/memoryConfig, which would pull this thin "read/write one JSON blob keyed by session id" adapter into the full agent memory wiring for no benefit; the evidence ledger already solves the identical problem the identical way against the same file.
+**Cost:** Two independent small LibSQL tables (evidence ledger, session manifest) instead of one memory subsystem; both are simple enough that this hasn't been a real cost so far.
+
+## D-32 delegate() uses Mastra's `structuredOutput`, not `experimental_output`
+24 Sep 2026, P5.2, `src/mastra/agents/contracts.ts`.
+**Chose:** `agent.generate(prompt, { structuredOutput: { schema } })` for every specialist call.
+**Over:** `experimental_output`, the older AI SDK v4 structured-output path some Mastra examples still show.
+**Because:** this installed `@mastra/core` version's `AgentGenerateOptions.output` is documented "does not work with tools," and every specialist here reaches its answer through tools first; `structuredOutput` is the option the installed `Agent.generate()` overloads type as compatible with a tool-calling loop (confirmed directly against `node_modules/@mastra/core/dist/agent/agent.d.ts`, no repo precedent existed to grep for).
+**Cost:** None found; this is the one option that actually works for a tool-calling specialist in this dependency version, not a trade-off between two working choices.
+
+## D-33 Orchestration logic lives in plain, directly-tested code; agent instructions restate it, they don't define it
+24 Sep 2026, P5.3-P5.6, `src/mastra/agents/orchestrator.ts`.
+**Chose:** Every rule that must hold regardless of what the model does — intent-to-specialist routing, the pending-source guard, parallel/sequential mode, which evidence becomes `knownFacts`, the plan shape, conflict detection — is a pure, synchronous, unit-tested TypeScript function (`decideAction`, `checkSourcesReady`, `decideDelegationMode`, `gatherKnownFactsForData`, `buildPlan`). The orchestrator's prompt describes these mechanisms so the model narrates them sensibly; it does not rely on the model to implement them.
+**Over:** Encoding the nine (now ten) rules as prose instructions only, and trusting the model to apply them consistently turn after turn.
+**Because:** this mirrors the project's own rule 1 one level up — arithmetic goes through DuckDB, not the model's head, because a model is unreliable at exactly the kind of thing that must hold every time; orchestration policy (never delegate to a pending source, never skip a gap, run independent work in parallel) is the same category of "must always be true," so it gets the same treatment.
+**Cost:** More code to maintain in `orchestrator.ts` than a prompt-only design would have, and every new orchestration rule needs a function plus a test, not just a paragraph. Worth it: this is what makes P5.3-P5.6's "Done when" bars testable without a live model at all.
+
+## D-34 Sequential-vs-parallel delegation decided by a keyword heuristic, not a second model call
+24 Sep 2026, P5.4, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `decideDelegationMode` matches a short literal dependency-language list ("then", "based on what", "after that", ...) against the raw request text, word-boundary regex, fully deterministic.
+**Over:** A second cheap classifier call (MODELS.ROUTER) asking "is this sequential or parallel."
+**Because:** consistent with D-33: the promptbook's own two worked examples plus a handful of obvious variants are all this needs to resolve correctly, and a second model round-trip for a narrow binary decision would trade determinism and test speed for no real gain.
+**Cost:** A genuinely novel phrasing with no matching marker word defaults to parallel even if a human would read it as sequential; acceptable given the two specialists still run (just not ordered), each reports its own gap honestly, and this is easy to extend with more markers if the demo ever hits a miss.
+
+## D-35 Evidence-conditioned queries (`knownFacts`) are gathered for the Data Analyst only
+24 Sep 2026, P5.5, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `gatherKnownFactsForData` pulls every evidence id cited by a `Finding` already in the manifest and attaches it to the Data Analyst's task specifically (both the parallel and P5.4 sequential paths); Document and Research tasks never receive this.
+**Over:** Gathering and attaching relevant evidence generically for every specialist.
+**Because:** docs/03-ARCHITECTURE.md's own framing of the mechanism is specifically "the orchestrator passes document derived facts into the Data Analyst's task as `knownFacts`, and the analyst turns them into query constraints" — a document fact reshaping a SQL `WHERE` clause is the concrete failure mode this closes; Document and Research specialists don't consume incoming facts the same way (they search text/web, they don't build filtered queries from a fact list).
+**Cost:** If a future specialist needed the same treatment, this function's name and scoping would need generalising; not needed yet.
+
+## D-36 Conflict detection scoped to this turn's gathered evidence, not the whole session
+24 Sep 2026, P5.6, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `detectConflicts` runs only over evidence returned by this turn's delegations (`outcomes`), never the full evidence ledger history.
+**Over:** Running it over every evidence entry ever recorded in the session.
+**Because:** a conflict worth surfacing right now is one relevant to what was just asked; a stale disagreement from an unrelated earlier turn would be noise in the answer rather than a useful flag.
+**Cost:** A conflict that exists in the ledger but wasn't touched by this turn's delegation stays silent until a later turn's delegation happens to re-surface both sides; acceptable since nothing is lost, it just isn't proactively raised.
+
+## D-37 Gzip/decompression live-API failure fixed at the fetch layer, not by patching a dependency
+25 Sep 2026, P5.7, `src/mastra/models.ts`.
+**Chose:** A scoped `globalThis.fetch` patch, installed once as `models.ts`'s own import-time side effect, forcing `Accept-Encoding: identity` on requests to `generativelanguage.googleapis.com` and `api.groq.com` only.
+**Over:** Patching or version-bumping `@mastra/core`/`ai`/`@ai-sdk/google`, or working around it per-call.
+**Because:** live tracing (P5.7) found `Agent.generate()`, called through Mastra's own streaming reader, throwing `AI_JSONParseError` on a `responseBody` that was still raw gzip (`1F 8B 08` magic bytes) with `responseHeaders: {}` — the response stream Mastra's reader consumed had never been handed through undici's transparent gunzip. This reproduced across the whole live orchestrator regardless of which internal SDK version built the request, so the only version-agnostic fix point was the raw HTTP layer: if the server is never asked to compress the response, there is nothing to fail to un-gzip. Confirmed fixed against many repeated live round trips.
+**Cost:** One more piece of global, load-order-sensitive state (a patched `globalThis.fetch`); scoped to exactly two hostnames and made idempotent to limit the blast radius. This had blocked every live verification attempt since Phase 4; worth flagging as the single highest-value fix in the whole project so far.
+
+## D-38 `jsonPromptInjection: true` on every specialist's structured output call
+25 Sep 2026, P5.7, `src/mastra/agents/contracts.ts`.
+**Chose:** `structuredOutput: { schema, jsonPromptInjection: true }` in `delegate()`.
+**Over:** Leaving `structuredOutput` at its default (native `response_format`), or a Gemini-specific branch only applied when the model tier is Gemini.
+**Because:** live P5.7 verification hit a deterministic (not intermittent) Gemini `400`: "Function calling with a response mime type: 'application/json' is unsupported," root-caused to `@ai-sdk/google` setting `responseMimeType` unconditionally whenever JSON structured output is requested, with no guard for `tools` also being present. Every specialist here always has both tools and `structuredOutput` set together, every call — this was a 100%-reproducing block on all specialist delegation. `jsonPromptInjection: true` is `@mastra/core`'s own documented option for this exact situation: it prompts for JSON via a system-message instruction instead of the native mechanism, so the conflicting field is never sent.
+**Cost:** Structured output now depends on the model actually following a prompt instruction rather than a server-enforced response format, in principle a softer guarantee; `SpecialistResultSchema.safeParse` still validates every result and `delegate()` still rejects a malformed one, so this doesn't weaken the anti-hallucination validation, only the mechanism that produces well-formed JSON in the first place. **Not live-confirmed** (Gemini free-tier daily quota ran out mid-verification) — a single live `delegate()` call once quota resets would close this out.
+
+## D-39 resolveReference prefers a filename match over a kind-keyword match when both fire
+25 Sep 2026, P5.7, `src/modules/session/reference.ts`.
+**Chose:** In `matchByNameOrKind`, a literal filename/title match now wins outright over a generic kind-keyword match (e.g. "brief" matching every prose-kind source via `SOURCE_KIND_KEYWORDS`); kind-keyword candidates are only used when no name match exists at all.
+**Over:** Treating both signals as equally weighted candidates, which is what P5.1 originally shipped.
+**Because:** live P5.7 verification, with `campaigns.xlsx` + `northwind-brief.pdf` + `customer-notes.docx` all loaded (the brief's own four-turn scenario), found `resolve_reference("the brief")` returning `ambiguous` between the pdf and the docx, since "brief" generically matches any prose source's kind keywords and drowned out the specific filename match. P5.1's own test suite never caught this because its one "the brief" test only ever loaded a single pdf source. A literal name match is objectively stronger evidence than a generic kind word.
+**Cost:** None found against the existing 15 `reference.test.ts` cases (all still pass); this is a strict precedence fix, not a new heuristic, and a regression test now covers the three-source scenario that exposed it.
+
 ---
 
 <!-- Append new decisions below as you make them. -->

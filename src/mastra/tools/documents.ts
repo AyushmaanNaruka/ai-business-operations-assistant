@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { ToolResult } from '@/types';
 import { createSession, type DuckDBSession } from '@/modules/analysis';
 import { getDocument, search } from '@/modules/documents';
+import { openLedger, type EvidenceLedger } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
 import { createSourceRegistry, ingest, type SourceRegistry } from '@/modules/sources';
 
@@ -59,13 +60,24 @@ function safe<T>(fn: () => Promise<ToolResult<T>>): () => Promise<ToolResult<T>>
  * once on first tool call so the Document agent has something real to
  * answer questions about in Mastra Studio.
  */
-let sessionPromise: Promise<{ session: DuckDBSession; registry: SourceRegistry }> | null = null;
+let sessionPromise: Promise<{ session: DuckDBSession; registry: SourceRegistry; ledger: EvidenceLedger }> | null = null;
+
+function resolveDatabaseUrl(raw: string): string {
+  if (!raw.startsWith('file:')) return raw;
+  const filePath = raw.slice('file:'.length);
+  const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath);
+  return isAbsolute ? raw : `file:${resolve(PROJECT_ROOT, filePath)}`;
+}
 
 async function getRuntime() {
   if (!sessionPromise) {
     sessionPromise = (async () => {
       const session = await createSession('phase3-document-shared-session');
       const registry = createSourceRegistry();
+      // Same evidence ledger file src/mastra/tools/analysis.ts opens: one ledger
+      // per process (D-15 stand-in), so a P5.2 evidence id is unique and
+      // resolvable regardless of which specialist recorded it.
+      const ledger = await openLedger(resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db'));
 
       const samplePaths = [resolve(PROJECT_ROOT, 'samples/northwind-brief.pdf'), resolve(PROJECT_ROOT, 'samples/customer-notes.docx')];
       for (const samplePath of samplePaths) {
@@ -74,7 +86,7 @@ async function getRuntime() {
         await waitForReady(registry, source.id);
       }
 
-      return { session, registry };
+      return { session, registry, ledger };
     })().catch((err: unknown) => {
       // Do not cache a rejected promise: a single transient init failure
       // (a locked db file, a bad sample file) would otherwise permanently
@@ -237,5 +249,65 @@ export const searchDocumentsTool = createTool({
       if (!result.ok) return result;
 
       return { ok: true as const, data: { passages: result.data } };
+    })(),
+});
+
+const evidenceOutputSchema = z.object({
+  id: z.string(),
+  claim: z.string(),
+  kind: z.enum(['computed', 'document', 'web']),
+  sourceId: z.string(),
+  sourceName: z.string(),
+  locator: z.string(),
+  method: z.string().optional(),
+  value: z.union([z.number(), z.string()]).optional(),
+  confidence: z.enum(['high', 'medium', 'low']),
+  retrievedAt: z.string().optional(),
+  metric: z
+    .object({ name: z.string(), scope: z.string(), unit: z.enum(['ratio', 'currency', 'count', 'duration']) })
+    .optional(),
+  createdAt: z.string(),
+});
+
+export const recordEvidenceTool = createTool({
+  id: 'record_evidence',
+  description:
+    'Records one fact quoted or retrieved from a document in the evidence ledger: the claim, its source, and a ' +
+    'locator (page number and/or heading). Set retrieved to true when the claim came from search_documents (a ' +
+    'reranked chunk, confidence "medium"), false when quoted from get_document (full context, confidence ' +
+    '"high"); this tool assigns confidence by that rule, it is never passed in. Call this for every claim that ' +
+    'will appear in your answer, then use the returned evidence object as-is in your structured output; do not ' +
+    'retype or paraphrase it.',
+  inputSchema: z.object({
+    claim: z.string().describe('Human readable statement of the fact, e.g. "Acme targets mid-market SaaS teams in North America"'),
+    sourceId: z.string().describe('The source id this claim came from, from list_documents.'),
+    sourceName: z.string().describe('The document name, e.g. "northwind-brief.pdf".'),
+    locator: z.string().describe('Where in the document, e.g. "page 2, Positioning".'),
+    value: z.union([z.number(), z.string()]).optional().describe('A quoted number or short value, if the claim is one.'),
+    retrieved: z
+      .boolean()
+      .describe('true if this claim came from search_documents (indexed mode), false if from get_document (full mode).'),
+  }),
+  outputSchema: toolResultSchema(z.object({ evidence: evidenceOutputSchema })),
+  execute: async (inputData: {
+    claim: string;
+    sourceId: string;
+    sourceName: string;
+    locator: string;
+    value?: number | string;
+    retrieved: boolean;
+  }) =>
+    safe(async () => {
+      const { ledger } = await getRuntime();
+      const evidence = await ledger.addEvidence({
+        claim: inputData.claim,
+        kind: 'document',
+        sourceId: inputData.sourceId,
+        sourceName: inputData.sourceName,
+        locator: inputData.locator,
+        ...(inputData.value !== undefined ? { value: inputData.value } : {}),
+        retrieved: inputData.retrieved,
+      });
+      return { ok: true as const, data: { evidence } };
     })(),
 });

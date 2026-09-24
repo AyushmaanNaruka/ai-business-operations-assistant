@@ -261,7 +261,33 @@ export const recordEvidenceTool = createTool({
       .describe('Set this when the value is a comparable metric, so conflict detection can find it.'),
   }),
   outputSchema: toolResultSchema(
-    z.object({ id: z.string(), confidence: z.enum(['high', 'medium', 'low']), value: z.union([z.number(), z.string()]) }),
+    z.object({
+      id: z.string(),
+      confidence: z.enum(['high', 'medium', 'low']),
+      value: z.union([z.number(), z.string()]),
+      // The full Evidence object this call just wrote to the ledger. P5.2:
+      // a specialist's structured SpecialistResult.evidence array must be
+      // populated from facts it actually recorded, not retyped from memory,
+      // so this tool hands back the exact object to echo, rather than
+      // asking the model to reconstruct id/kind/sourceId/confidence/createdAt
+      // itself from what it recalls of this call.
+      evidence: z.object({
+        id: z.string(),
+        claim: z.string(),
+        kind: z.enum(['computed', 'document', 'web']),
+        sourceId: z.string(),
+        sourceName: z.string(),
+        locator: z.string(),
+        method: z.string().optional(),
+        value: z.union([z.number(), z.string()]).optional(),
+        confidence: z.enum(['high', 'medium', 'low']),
+        retrievedAt: z.string().optional(),
+        metric: z
+          .object({ name: z.string(), scope: z.string(), unit: z.enum(['ratio', 'currency', 'count', 'duration']) })
+          .optional(),
+        createdAt: z.string(),
+      }),
+    }),
   ),
   execute: async (inputData: {
     claim: string;
@@ -301,6 +327,6 @@ export const recordEvidenceTool = createTool({
         value,
         ...(inputData.metric ? { metric: inputData.metric } : {}),
       });
-      return { ok: true as const, data: { id: evidence.id, confidence: evidence.confidence, value } };
+      return { ok: true as const, data: { id: evidence.id, confidence: evidence.confidence, value, evidence } };
     })(),
 });

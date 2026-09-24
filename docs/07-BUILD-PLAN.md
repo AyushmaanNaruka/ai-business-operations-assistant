@@ -56,16 +56,23 @@ The prompts that build each item are in `PROMPTBOOK.md`, phase by phase. Use one
 
 ## Thursday 25 September: orchestration
 
-- [ ] Orchestrator agent with its nine instruction rules
-- [ ] `SpecialistTask` and `SpecialistResult` contracts wired
-- [ ] Intent classification including the `recommendation` class
-- [ ] Parallel delegation when independent, sequential when dependent
-- [ ] Evidence conditioned queries: document facts become query constraints
-- [ ] Conflict detection wired into synthesis
-- [ ] Plan statement and progress streaming for multi part requests
-- [ ] M8 session manifest and reference resolution
+- [x] Orchestrator agent with its nine (now ten, see D-36) instruction rules
+- [x] `SpecialistTask` and `SpecialistResult` contracts wired
+- [x] Intent classification including the `recommendation` class
+- [x] Parallel delegation when independent, sequential when dependent
+- [x] Evidence conditioned queries: document facts become query constraints
+- [x] Conflict detection wired into synthesis
+- [x] Plan statement and progress streaming for multi part requests
+- [x] M8 session manifest and reference resolution
 
-**Demonstrable:** the full four turn conversation from the brief, end to end.
+**Demonstrable:** the full four turn conversation from the brief, end to end. Verified turns 1-3 against
+the real code path (unit tested); turn 4's plan-statement quality is model-judgement dependent and
+wasn't live-confirmed before the Gemini free-tier daily quota ran out (see D-37/D-38). All 310 tests
+pass, `tsc --noEmit` is clean. Note for Saturday: nothing yet calls `addSource()` against the
+orchestrator's own `SessionManifest` on upload (`dataAnalyst`/`documentAgent` each still auto-load
+samples into their own private D-15/D-27 stand-in sessions) — confirm the chat UI's upload flow wires
+into `src/mastra/session/manifestStore.ts`, or `read_session_manifest`/`resolve_reference` will see
+nothing.
 
 ---
 

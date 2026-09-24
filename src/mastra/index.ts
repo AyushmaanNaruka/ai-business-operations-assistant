@@ -9,9 +9,9 @@ import {
   Observability,
   SensitiveDataFilter,
 } from '@mastra/observability';
-import { agent } from './agents/agent';
 import { dataAnalyst } from './agents/dataAnalyst';
 import { documentAgent } from './agents/documentAgent';
+import { orchestrator } from './agents/orchestrator';
 import { researchAgent } from './agents/researchAgent';
 
 // `mastra dev` runs the bundled server with its cwd set to src/mastra/public, not the
@@ -34,7 +34,7 @@ export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  agents: { agent, dataAnalyst, documentAgent, researchAgent },
+  agents: { orchestrator, dataAnalyst, documentAgent, researchAgent },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({
