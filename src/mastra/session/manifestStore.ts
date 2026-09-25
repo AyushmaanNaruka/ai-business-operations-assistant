@@ -5,6 +5,10 @@ import { emptyManifest } from '@/modules/session';
 export type ManifestStore = {
   loadManifest(sessionId: string): Promise<SessionManifest>;
   saveManifest(sessionId: string, manifest: SessionManifest): Promise<void>;
+  /** Removes a session's manifest, for when its conversation is deleted from the chat sidebar. */
+  deleteManifest(sessionId: string): Promise<void>;
+  /** The highest N of any "src_N" source id saved in any session, or 0. Seeds the source registry on startup. */
+  maxSourceNumber(): Promise<number>;
   close(): Promise<void>;
 };
 
@@ -59,6 +63,27 @@ export async function openManifestStore(url: string): Promise<ManifestStore> {
         `,
         args: [sessionId, JSON.stringify(manifest), new Date().toISOString()],
       });
+    },
+
+    async deleteManifest(sessionId) {
+      await client.execute({ sql: 'DELETE FROM session_manifest WHERE session_id = ?', args: [sessionId] });
+    },
+
+    async maxSourceNumber() {
+      const result = await client.execute('SELECT data FROM session_manifest');
+      let max = 0;
+      for (const row of result.rows) {
+        try {
+          const manifest = JSON.parse(row.data as string) as SessionManifest;
+          for (const source of manifest.sources) {
+            const n = Number(/^src_(\d+)$/.exec(source.id)?.[1]);
+            if (Number.isFinite(n) && n > max) max = n;
+          }
+        } catch {
+          // A row that does not parse cannot hold an id to collide with.
+        }
+      }
+      return max;
     },
 
     async close() {

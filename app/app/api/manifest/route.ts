@@ -10,7 +10,9 @@ export async function GET(req: Request) {
   try {
     const manifest = await getManifestSnapshot(threadId);
     return Response.json({
-      sources: manifest.sources,
+      // `path` is a server side disk path (src/types/source.ts); the browser
+      // previews a source by id through /api/preview, never by path.
+      sources: manifest.sources.map(({ path: _path, ...source }) => source),
       artifacts: manifest.artifacts,
       openGaps: manifest.openGaps,
     });

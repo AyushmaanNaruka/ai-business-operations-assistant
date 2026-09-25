@@ -15,10 +15,17 @@ export type SourceRegistry = {
   nextId(): string;
 };
 
-export function createSourceRegistry(): SourceRegistry {
+/**
+ * `startAfter` seeds the id counter. The registry lives in memory but session
+ * manifests persist (src/mastra/session/manifestStore.ts), so after a restart the
+ * counter must start past every "src_N" already saved; starting again at src_1
+ * would give a new upload the id of an old one, and the manifest (keyed by id)
+ * would silently replace the old source with it.
+ */
+export function createSourceRegistry(options: { startAfter?: number } = {}): SourceRegistry {
   const sources = new Map<string, Source>();
   const byHash = new Map<string, string>();
-  let counter = 0;
+  let counter = Math.max(0, Math.floor(options.startAfter ?? 0));
 
   return {
     addSource(source, contentHash) {

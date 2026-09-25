@@ -70,6 +70,12 @@ describe('createSourceRegistry', () => {
     expect(() => registry.updateStatus('src_missing', 'ready')).not.toThrow();
   });
 
+  it('nextId continues past startAfter, so a restart never reuses a saved id', () => {
+    const registry = createSourceRegistry({ startAfter: 7 });
+    expect(registry.nextId()).toBe('src_8');
+    expect(registry.nextId()).toBe('src_9');
+  });
+
   it('nextId produces sequential "src_N" ids', () => {
     const registry = createSourceRegistry();
     expect(registry.nextId()).toBe('src_1');

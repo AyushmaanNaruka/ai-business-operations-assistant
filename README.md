@@ -12,12 +12,14 @@ Built with TypeScript and Mastra.
 
 ```bash
 npm install
-cp .env.example .env     # add your keys, see docs/10-SETUP.md
-npm run dev              # Mastra Studio at localhost:4111
-npm run dev:web          # chat UI
+cp .env.example .env         # add your keys, see docs/10-SETUP.md
+npm run dev                  # Mastra Studio at localhost:4111
+cd app && npm run dev        # chat UI at localhost:3000
 ```
 
 Full setup, including free tier key sources: `docs/10-SETUP.md`
+
+The chat UI keeps every conversation in a left sidebar (reopen one to continue where you left off, files included), previews uploaded and generated files beside the chat, and answers on Gemini 2.5 Flash with Groq as an automatic fallback when Gemini is unavailable.
 
 ---
 

@@ -1,8 +1,6 @@
-import {
-  ComposerAddAttachment,
-  ComposerAttachments,
-  UserMessageAttachments,
-} from "@ui/components/assistant-ui/elements/attachment.aui";
+import { UserMessageAttachments } from "@ui/components/assistant-ui/elements/attachment.aui";
+import { FileKindIcon } from "@ui/components/file-icon";
+import { ACCEPTED_EXTENSIONS, useSessionFiles } from "@ui/components/session-files";
 import { MarkdownText } from "@ui/components/assistant-ui/elements/markdown-text";
 import { ToolFallback } from "@ui/components/assistant-ui/elements/tool-fallback.aui";
 import { TooltipIconButton } from "@ui/components/assistant-ui/elements/tooltip-icon-button";
@@ -17,7 +15,6 @@ import {
   ComposerPrimitive,
   ErrorPrimitive,
   MessagePrimitive,
-  SuggestionPrimitive,
   ThreadPrimitive,
   useAuiState,
 } from "@assistant-ui/react";
@@ -31,11 +28,13 @@ import {
   DownloadIcon,
   MicIcon,
   MoreHorizontalIcon,
+  Loader2Icon,
+  PaperclipIcon,
   PencilIcon,
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import type { FC } from "react";
+import { useRef, useState, type FC } from "react";
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -80,11 +79,10 @@ export const Thread: FC = () => {
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
       style={{
-        ["--thread-max-width" as string]: "44rem",
-        ["--composer-bg" as string]:
-          "color-mix(in oklab, var(--color-muted) 30%, transparent)",
-        ["--composer-radius" as string]: "1rem",
-        ["--composer-padding" as string]: "8px",
+        ["--thread-max-width" as string]: "48rem",
+        ["--composer-bg" as string]: "var(--color-background)",
+        ["--composer-radius" as string]: "1.75rem",
+        ["--composer-padding" as string]: "10px",
       }}
     >
       <ThreadPrimitive.Viewport
@@ -126,6 +124,11 @@ export const Thread: FC = () => {
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />
             </AuiIf>
+            <AuiIf condition={(s) => !isNewChatView(s)}>
+              <p className="text-muted-foreground -mt-2 text-center text-xs">
+                Figures are computed from your files and cited. Check anything important.
+              </p>
+            </AuiIf>
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
@@ -158,68 +161,151 @@ const ThreadScrollToBottom: FC = () => {
 
 const ThreadWelcome: FC = () => {
   return (
-    <div className="aui-thread-welcome-root mb-6 flex flex-col px-2">
-      <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-medium tracking-tight duration-200">
-        How can I help you today?
+    <div className="aui-thread-welcome-root mb-8 flex flex-col items-center px-2 text-center">
+      <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-[1.75rem] leading-tight font-medium tracking-tight duration-200">
+        What can I help with?
+      </p>
+      <p className="text-muted-foreground fade-in animate-in fill-mode-both mt-2 text-sm delay-75 duration-300">
+        Upload a spreadsheet, a PDF or a Word file, or name a company to research.
       </p>
     </div>
   );
 };
 
+/**
+ * Starter prompts for an empty chat, the business equivalent of ChatGPT's chips.
+ * Each one maps to a real capability (analysis, documents, research, artifacts);
+ * none of them presumes a file is loaded, since the agent checks the manifest first.
+ * `send: false` fills the composer instead, for a prompt the user has to finish.
+ */
+const STARTER_PROMPTS = [
+  { title: "Analyse my data", prompt: "Analyse the campaign data I uploaded and tell me which channels performed best, with the numbers.", send: true },
+  { title: "Summarise a document", prompt: "Summarise the key points of the document I uploaded, with citations.", send: true },
+  { title: "Research a company", prompt: "Research this company and give me a short profile: ", send: false },
+  { title: "Build a client deck", prompt: "Turn the findings so far into a client presentation and an Excel workbook.", send: true },
+] as const;
+
 const ThreadSuggestions: FC = () => {
   return (
-    <div className="aui-thread-welcome-suggestions flex w-full flex-col">
-      <ThreadPrimitive.Suggestions>
-        {() => <ThreadSuggestionItem />}
-      </ThreadPrimitive.Suggestions>
-    </div>
-  );
-};
-
-const ThreadSuggestionItem: FC = () => {
-  return (
-    <div className="aui-thread-welcome-suggestion-display fade-in slide-in-from-bottom-2 animate-in fill-mode-both duration-200">
-      <SuggestionPrimitive.Trigger send asChild>
-        <button
-          type="button"
-          className="aui-thread-welcome-suggestion group hover:bg-foreground/[0.03] focus-visible:ring-ring/50 flex w-full items-baseline gap-2.5 rounded-md px-2 py-2 text-start text-sm transition-colors outline-none focus-visible:ring-1 motion-reduce:transition-none"
-        >
-          <span
-            aria-hidden
-            className="text-muted-foreground/60 group-hover:text-foreground font-mono text-xs transition-colors motion-reduce:transition-none"
+    <div className="aui-thread-welcome-suggestions fade-in slide-in-from-bottom-2 animate-in fill-mode-both flex flex-wrap justify-center gap-2 duration-300">
+      {STARTER_PROMPTS.map((s) => (
+        <ThreadPrimitive.Suggestion key={s.title} prompt={s.prompt} send={s.send} asChild>
+          <button
+            type="button"
+            className="text-foreground hover:bg-muted focus-visible:ring-ring/50 rounded-full border px-3.5 py-2 text-sm transition-colors outline-none focus-visible:ring-2 motion-reduce:transition-none"
           >
-            {">"}
-          </span>
-          <span className="min-w-0 flex-1 truncate">
-            <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1 text-foreground" />{" "}
-            <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 text-muted-foreground empty:hidden" />
-          </span>
-        </button>
-      </SuggestionPrimitive.Trigger>
+            {s.title}
+          </button>
+        </ThreadPrimitive.Suggestion>
+      ))}
     </div>
   );
 };
 
 const Composer: FC = () => {
+  const { uploadFiles } = useSessionFiles();
+  const [isDragging, setIsDragging] = useState(false);
+
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
-        >
-          <ComposerAttachments />
-          <ComposerPrimitive.Input
-            placeholder="Send a message..."
-            className="aui-composer-input placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-            rows={1}
-            autoFocus
-            aria-label="Message input"
-          />
-          <ComposerAction />
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
+      <div
+        data-slot="aui_composer-shell"
+        data-dragging={isDragging}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(e) => {
+          if (e.dataTransfer.files.length === 0) return;
+          e.preventDefault();
+          setIsDragging(false);
+          void uploadFiles(e.dataTransfer.files);
+        }}
+        className="border-foreground/10 focus-within:border-foreground/20 data-[dragging=true]:border-foreground/40 data-[dragging=true]:bg-muted flex w-full cursor-text flex-col gap-1 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_8px_24px_-12px_rgba(0,0,0,0.12),0_1px_3px_rgba(0,0,0,0.05)] transition-[border-color,background-color] data-[dragging=true]:border-dashed"
+      >
+        <ComposerFileChips />
+        <ComposerPrimitive.Input
+          placeholder="Ask anything"
+          className="aui-composer-input placeholder:text-muted-foreground/80 max-h-52 min-h-11 w-full resize-none bg-transparent px-3 py-2 text-base leading-6 outline-none"
+          rows={1}
+          autoFocus
+          aria-label="Message input"
+        />
+        <ComposerAction />
+      </div>
     </ComposerPrimitive.Root>
+  );
+};
+
+/** Files uploaded since the last message, shown inside the composer the way ChatGPT shows attachments. Click to preview. */
+const ComposerFileChips: FC = () => {
+  const { recentSources, openPreview } = useSessionFiles();
+  if (recentSources.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 px-1 pt-1">
+      {recentSources.map((source) => {
+        const pending = source.status === "pending";
+        const kind = pending ? (source.name.split(".").pop()?.toLowerCase() ?? "") : source.kind;
+        return (
+          <button
+            key={source.id}
+            type="button"
+            disabled={pending}
+            onClick={() => openPreview({ sourceId: source.id, label: source.name })}
+            className="hover:bg-muted flex max-w-64 items-center gap-2.5 rounded-2xl border p-2 pr-3 text-left transition-colors disabled:cursor-progress"
+          >
+            <span className="relative">
+              <FileKindIcon kind={kind} className="size-9 rounded-xl" />
+              {pending && (
+                <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/35">
+                  <Loader2Icon className="size-4 animate-spin text-white" />
+                </span>
+              )}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">{source.name}</span>
+              <span className={source.status === "failed" ? "text-destructive block text-xs" : "text-muted-foreground block text-xs"}>
+                {pending ? "Reading…" : source.status === "failed" ? "Could not read" : "Ready"}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+const ComposerUploadButton: FC = () => {
+  const { uploadFiles, isUploading } = useSessionFiles();
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <TooltipIconButton
+        tooltip="Attach files"
+        side="bottom"
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="text-foreground hover:bg-muted size-9 rounded-full p-2"
+        aria-label="Attach files"
+        onClick={() => inputRef.current?.click()}
+      >
+        {isUploading ? <Loader2Icon className="size-[18px] animate-spin" /> : <PaperclipIcon className="size-[18px]" />}
+      </TooltipIconButton>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept={ACCEPTED_EXTENSIONS}
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) void uploadFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
+    </>
   );
 };
 
@@ -233,7 +319,7 @@ const ComposerAction: FC = () => {
 
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <ComposerAddAttachment />
+      <ComposerUploadButton />
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>
@@ -281,10 +367,10 @@ const ComposerAction: FC = () => {
               type="button"
               variant="default"
               size="icon"
-              className="aui-composer-send size-7 rounded-full"
+              className="aui-composer-send disabled:bg-foreground/15 disabled:text-background size-9 rounded-full disabled:opacity-100"
               aria-label="Send message"
             >
-              <ArrowUpIcon className="aui-composer-send-icon size-4" />
+              <ArrowUpIcon className="aui-composer-send-icon size-[18px]" />
             </TooltipIconButton>
           </ComposerPrimitive.Send>
         </AuiIf>
@@ -300,7 +386,7 @@ const ComposerAction: FC = () => {
               type="button"
               variant="default"
               size="icon"
-              className="aui-composer-cancel size-7 rounded-full"
+              className="aui-composer-cancel size-9 rounded-full"
               aria-label={isSending ? "Cancel sending" : "Stop generating"}
             >
               <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
@@ -424,13 +510,13 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,70%)] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />
 
-      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden">
+      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0 justify-self-end">
+        <div className="aui-user-message-content peer bg-muted text-foreground rounded-3xl px-5 py-2.5 leading-relaxed wrap-break-word whitespace-pre-wrap empty:hidden">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">

@@ -152,6 +152,8 @@ That is a gift for the interview. The right answer to "why this architecture" is
 
 Note: Google removed the per model free tier table from their docs. Check your live quota at aistudio.google.com/rate-limit before the demo.
 
+(Updated 26 Sep 2026: the Groq fallback is now automatic. `MODELS.ANALYST` and `MODELS.WRITER` are Mastra model fallback lists, Gemini first and Groq second, so a Gemini quota error re-runs the step on Groq. See docs/DECISIONS.md D-48.)
+
 ### 2.3 Numerical analysis: the most important technical decision
 
 The brief says calculations must be programmatic. There are three ways to do this, and the choice is a big part of the score.
@@ -395,6 +397,8 @@ That is a real, measurable token argument, not a hand wave, and it is exactly th
 | Build a chat UI from scratch | Two days | Not worth it |
 
 **Recommendation:** Next.js with assistant-ui. It has an official Mastra integration, `npx assistant-ui@latest init` scaffolds it, and streaming works out of the box through `toAISdkStream`. Keep Mastra Studio running alongside during the demo to show the agent traces, which is genuinely impressive and costs nothing.
+
+(Updated 26 Sep 2026: conversation history comes from Mastra Memory, converted with `toAISdkMessages` from `@mastra/ai-sdk/ui`. File previews reuse the ingestion libraries (exceljs, csv-parse, mammoth) plus **`jszip`** to read a .pptx's slide XML; jszip was already installed as a dependency of pptxgenjs, exceljs, docx and mammoth. See docs/DECISIONS.md D-49 and D-50.)
 
 ### 2.10 Final stack summary
 

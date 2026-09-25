@@ -26,6 +26,7 @@ export type Source = {
   kind: SourceKind
   origin: 'upload' | 'url'
   status: SourceStatus
+  path?: string              // where an upload was saved on disk, for the file preview; never sent to the browser
 
   // a source can be BOTH of these
   tables?: TableRef[]        // set when tabular, or when tables were found in a document
@@ -207,3 +208,29 @@ export type SessionManifest = {
 ```
 
 This is why long conversations stay affordable. History grows and gets summarised, losing precision; a manifest stays small and exact. When the user says "compare it with the other one", the reference resolves from here, not from re-reading twenty messages.
+
+## FilePreview
+
+What the chat UI's preview panel renders for one file (`src/modules/preview/types.ts`, D-50). Built by deterministic code, never by a model.
+
+```ts
+export type FilePreview =
+  | { type: 'pdf' }                                   // the browser's own viewer shows the raw file
+  | { type: 'text'; format: 'markdown' | 'plain' | 'json'; text: string; truncated: boolean }
+  | { type: 'table'; sheets: { name: string; columns: string[]; rows: string[][]; totalRows: number }[] }
+  | { type: 'html'; html: string }                    // a Word document, rendered in a sandboxed iframe
+  | { type: 'slides'; slides: { number: number; title: string; body: string[] }[] }
+```
+
+## ConversationSummary
+
+One row of the chat sidebar (`src/mastra/conversations.ts`, D-49). The id is the Mastra Memory thread id and also the session id of the conversation's manifest.
+
+```ts
+export type ConversationSummary = {
+  id: string
+  title: string       // the user's first message, trimmed, unless renamed
+  createdAt: string
+  updatedAt: string
+}
+```

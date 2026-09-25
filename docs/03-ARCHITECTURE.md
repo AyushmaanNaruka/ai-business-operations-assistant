@@ -591,11 +591,13 @@ agents/
 ```ts
 export const MODELS = {
   ROUTER:  'groq/openai/gpt-oss-120b',       // fast, cheap, classification
-  ANALYST: 'google/gemini-2.5-flash',        // SQL and reasoning
-  WRITER:  'google/gemini-2.5-flash',        // artifact authoring
+  ANALYST: [gemini-2.5-flash, then groq/openai/gpt-oss-120b],  // SQL and reasoning
+  WRITER:  [gemini-2.5-flash, then groq/openai/gpt-oss-120b],  // artifact authoring
   RERANK:  'groq/openai/gpt-oss-20b',        // re-ranking scorer
 }
 ```
+
+(Updated 26 Sep 2026: ANALYST and WRITER are ordered fallback lists. Mastra runs each LLM step on the first model that answers, so a Gemini quota error re-runs that step on Groq instead of failing the turn. See docs/DECISIONS.md D-48.)
 
 (Updated 23 Sep 2026, P3.4: the originally planned `llama-3.3-70b-versatile` and `llama-3.1-8b-instant` are not in this project's live Groq account's model catalog. See docs/DECISIONS.md D-24.)
 
@@ -630,6 +632,8 @@ ARTIFACTS
 **Why a manifest instead of relying on message history:** history grows, gets summarised and loses precision. A manifest is small, structured, always current, and cheap to keep permanently in context. When the user says "compare it with the other one", the orchestrator resolves "the other one" from the manifest, not by re-reading twenty messages.
 
 The manifest is also what makes long conversations affordable, which is concern E12.
+
+**Conversation history in the UI** (added 26 Sep 2026, D-49). The chat sidebar reads threads straight out of the orchestrator's Mastra Memory (`src/mastra/conversations.ts`); there is no second history store. The thread id is also the session id for the manifest and evidence ledger, so reopening a conversation restores its messages, its source list and its generated files together, and the next turn continues with full memory. Titles are the user's first message, trimmed (`src/modules/session/title.ts`), not a model call. One limit: the DuckDB session is in memory, so after a server restart a reopened chat's spreadsheets must be uploaded again before they can be queried.
 
 ### M9. Reliability Layer
 
@@ -683,13 +687,21 @@ RENDER_FAILED      PLAN_INVALID      UNSUPPORTED
 
 ---
 
+### M10. File Preview
+
+**Job:** let the user look at a file without downloading it (added 26 Sep 2026, D-50).
+
+Clicking an uploaded source or a generated artifact opens it in a panel beside the chat. `src/modules/preview` turns a file into a typed `FilePreview` with deterministic code only: a table of the first 100 rows per sheet (xlsx, csv), sandboxed HTML (docx), a slide text outline (pptx), the raw file for the browser's PDF viewer, or text. `src/mastra/preview.ts` resolves what to open through the conversation's manifest, so the browser names ids, never paths. Rules 3 and 4 apply as everywhere else: no model is involved, and file content is displayed as data inside an iframe that can run no script.
+
 ## Part 6: Repository layout
 
 ```
 src/
   mastra/
     index.ts                  Mastra instance, storage, registration
-    models.ts                 model tiers
+    models.ts                 model tiers, Gemini with Groq fallback
+    conversations.ts          chat sidebar: list, load, rename, delete threads
+    preview.ts                resolves a preview target through the manifest
     agents/
       orchestrator.ts
       dataAnalyst.ts
@@ -711,7 +723,9 @@ src/
     research/                 M4 providers and fallbacks
     evidence/                 M5 ledger, conflict detection
     artifacts/                M6 skills, schemas, renderers, charts
+    session/                  M8 manifest, references, conversation titles
     reliability/              M9 ToolResult, error codes, retry
+    preview/                  M10 file previews for the chat UI
   types/                      shared types, one file per concept
 app/                          Next.js chat UI
 skills/                       SKILL.md files, readable in the repo

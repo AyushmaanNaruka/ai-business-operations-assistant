@@ -67,6 +67,7 @@ export function ingest(session: DuckDBSession, registry: SourceRegistry, input: 
       kind: 'txt', // placeholder until detectType resolves; never read while status is 'pending'
       origin: 'upload',
       status: 'pending',
+      path: input.path,
       summary: `${id}  ${name}  detecting type...`,
       addedAt: now,
     };

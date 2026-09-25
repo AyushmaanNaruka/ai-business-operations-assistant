@@ -1,6 +1,8 @@
 import { handleChatStream } from "@mastra/ai-sdk";
 import { createUIMessageStreamResponse, type UIMessageChunk } from "ai";
 import { mastra } from "@/mastra";
+import { CHAT_RESOURCE_ID, ensureConversation } from "@/mastra/conversations";
+import { firstUserText, messageText } from "@/modules/session";
 
 // docs/03-ARCHITECTURE.md Part 10 gap 2: long work (a multi-specialist "mixed"
 // turn, two artifact workflows) can pass 20-30s comfortably. The design point is
@@ -21,14 +23,32 @@ export async function POST(req: Request) {
     return Response.json({ error: "Malformed request body." }, { status: 400 });
   }
 
-  // AssistantChatTransport sends `id` (assistant-ui's per-conversation chat id,
-  // stable for the life of the browser tab per app/assistant.tsx) on every
-  // request; Mastra's Memory keys a working-memory thread off exactly this kind
-  // of id, and this session's own tools (read_session_manifest, handle_request,
-  // request_artifact — src/mastra/agents/orchestrator.ts) resolve the SAME id
-  // from `context.agent.threadId` (src/mastra/runtime.ts resolveSessionId), so
-  // one browser conversation gets one manifest end to end.
-  const threadId = typeof params.id === "string" && params.id.length > 0 ? params.id : "default-thread";
+  // `params.id` is assistant-ui's own internal thread-list id (`__LOCALID_...`
+  // until a cloud adapter assigns a real one) — NOT the app's session id, and
+  // it never matches the id the sources panel uploads under (verified live:
+  // chat POSTs carried `__LOCALID_goZpC89` while uploads/manifest used the
+  // app's UUID). `sessionId` is sent explicitly via AssistantChatTransport's
+  // `body` option (app/app/assistant.tsx) for exactly this reason; Mastra's
+  // Memory keys a working-memory thread off it, and this session's own tools
+  // (read_session_manifest, handle_request, request_artifact —
+  // src/mastra/agents/orchestrator.ts) resolve the SAME id from
+  // `context.agent.threadId` (src/mastra/runtime.ts resolveSessionId), so one
+  // browser conversation gets one manifest end to end.
+  const threadId =
+    typeof params.sessionId === "string" && params.sessionId.length > 0 ? params.sessionId : "default-thread";
+
+  // Creates the conversation's thread on its first message, titled from that
+  // message, so the sidebar lists it before the answer finishes streaming
+  // (src/mastra/conversations.ts). Best effort: if this fails, Mastra still
+  // creates the thread itself when it saves the turn, just with a placeholder
+  // title the sidebar derives a real one from on read.
+  try {
+    const messages: { role?: string; parts?: { type: string; text?: string }[] }[] = Array.isArray(params.messages) ? params.messages : [];
+    const latestUser = [...messages].reverse().find((m) => m.role === "user");
+    await ensureConversation(threadId, firstUserText(messages) || (latestUser ? messageText(latestUser) : ""));
+  } catch {
+    // see above
+  }
 
   try {
     const stream = await handleChatStream({
@@ -36,7 +56,7 @@ export async function POST(req: Request) {
       agentId: "orchestrator",
       params: {
         ...params,
-        memory: { thread: threadId, resource: "demo-user" },
+        memory: { thread: threadId, resource: CHAT_RESOURCE_ID },
       },
       // The default error serializer still forwards the provider's raw message
       // and stack (docs/09-TESTING.md P7.4: "no stack traces" is one of the
@@ -46,7 +66,9 @@ export async function POST(req: Request) {
       onError: (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         if (/quota|rate limit|429/i.test(message)) {
-          return "The model provider's free tier is temporarily rate limited. Please wait a moment and try again.";
+          // Reaching here means every model in the tier's fallback chain
+          // (src/mastra/models.ts: Gemini, then Groq) was rate limited.
+          return "Both model providers' free tiers are temporarily rate limited. Please wait a moment and try again.";
         }
         return "Something went wrong answering that. Please try again.";
       },

@@ -9,10 +9,11 @@ import {
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
-import { type FC, memo } from "react";
+import { type ComponentProps, type FC, memo } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@ui/components/assistant-ui/elements/tooltip-icon-button";
+import { useOptionalSessionFiles } from "@ui/components/session-files";
 import { useCopyToClipboard } from "@ui/hooks/use-copy-to-clipboard";
 import { cn } from "@ui/lib/utils";
 
@@ -50,6 +51,32 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
         )}
       </TooltipIconButton>
     </div>
+  );
+};
+
+/**
+ * A link in an answer. A `/generated/<file>` link (the downloadUrl the
+ * orchestrator relays for every finished artifact) opens the file in the preview
+ * panel beside the chat instead of downloading it; the panel has its own download
+ * button. Every other link behaves normally.
+ */
+const MarkdownLink: FC<ComponentProps<"a">> = ({ className, href, onClick, ...props }) => {
+  const files = useOptionalSessionFiles();
+  const generated = href ? /^(?:https?:\/\/[^/]+)?\/generated\/([^/?#]+)$/.exec(href) : null;
+  return (
+    <a
+      className={cn("aui-md-a text-primary hover:text-primary/80 underline underline-offset-2", className)}
+      href={href}
+      onClick={(e) => {
+        onClick?.(e);
+        if (!generated || !files || e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey) return;
+        e.preventDefault();
+        const file = decodeURIComponent(generated[1] ?? "");
+        const label = typeof props.children === "string" ? props.children : file;
+        files.openPreview({ file, label });
+      }}
+      {...props}
+    />
   );
 };
 
@@ -117,15 +144,7 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
-  a: ({ className, ...props }) => (
-    <a
-      className={cn(
-        "aui-md-a text-primary hover:text-primary/80 underline underline-offset-2",
-        className,
-      )}
-      {...props}
-    />
-  ),
+  a: ({ className, ...props }) => <MarkdownLink className={className} {...props} />,
   blockquote: ({ className, ...props }) => (
     <blockquote
       className={cn(

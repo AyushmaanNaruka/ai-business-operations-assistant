@@ -53,6 +53,25 @@ describe('ManifestStore (in-memory)', () => {
     expect((await store.loadManifest('session-b')).sources[0]!.id).toBe('src_2');
   });
 
+  it('maxSourceNumber finds the highest src_N across every session', async () => {
+    store = await openManifestStore(':memory:');
+    expect(await store.maxSourceNumber()).toBe(0);
+    await store.saveManifest('session-a', addSource(emptyManifest(), makeSource('src_3')));
+    await store.saveManifest('session-b', addSource(addSource(emptyManifest(), makeSource('src_12')), makeSource('src_campaigns')));
+    expect(await store.maxSourceNumber()).toBe(12);
+  });
+
+  it('deleteManifest removes one session and leaves the others', async () => {
+    store = await openManifestStore(':memory:');
+    await store.saveManifest('session-a', addSource(emptyManifest(), makeSource('src_1')));
+    await store.saveManifest('session-b', addSource(emptyManifest(), makeSource('src_2')));
+
+    await store.deleteManifest('session-a');
+
+    expect((await store.loadManifest('session-a')).sources).toEqual([]);
+    expect((await store.loadManifest('session-b')).sources[0]!.id).toBe('src_2');
+  });
+
   it('a second save for the same session overwrites the first', async () => {
     store = await openManifestStore(':memory:');
     const first = addSource(emptyManifest(), makeSource('src_1'));

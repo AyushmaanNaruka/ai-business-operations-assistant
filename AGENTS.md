@@ -80,6 +80,8 @@ src/
     evidence/         M5 ledger, findings, conflicts
     artifacts/        M6 schemas, renderers, charts
     reliability/      M9 ToolResult, errors, retry
+    session/          M8 manifest, references, conversation titles
+    preview/          M10 file previews for the chat UI
   types/              shared types
 app/                  Next.js chat UI
 skills/               SKILL.md files, loaded by agents at runtime

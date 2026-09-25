@@ -344,6 +344,41 @@ Date, one line of context
 **Because:** live-caught while smoke-testing uploads through the Next.js dev server: this module had never needed the D-09 fix before, since every prior caller (`mastra dev`, vitest, `tsx` scripts) happened to run with `cwd` already at the project root. Running inside the Next.js process (`cwd` = `app/`) silently wrote every document to `app/data/documents/` instead — a second, wrong copy of the store, invisible to `mastra dev`/Studio, and a real bug this exact phase's own new caller exposed.
 **Cost:** None; `getDocument`/`saveMarkdown`'s existing tests still pass, since they already ran with `cwd` at the project root.
 
+## D-48 Gemini first, Groq as an automatic fallback, through Mastra's model fallback list
+26 Sep 2026, interface upgrade, `src/mastra/models.ts`.
+**Chose:** `MODELS.ANALYST` and `MODELS.WRITER` are ordered lists, `[{ model: 'google/gemini-2.5-flash', maxRetries: 0 }, { model: 'groq/openai/gpt-oss-120b', maxRetries: 1 }]`, which Mastra's `Agent` accepts in place of a single model id. Each LLM step runs against the first entry that answers; an error on Gemini (a free tier 429, a 503, a bad key) re-runs that same step on Groq. `ROUTER` and `RERANK` stay plain strings. `MODEL_FALLBACK=off` pins Gemini alone.
+**Over:** A manual swap in `models.ts` whenever Gemini's quota runs out (what the 26 Sep smoke test had to do by hand), or a try/catch retry wrapper in the chat route.
+**Because:** Gemini's free tier quota is per day, so once it is gone every turn fails until midnight Pacific; a fallback turns that from an outage into a slightly different model answering. Doing it per step inside Mastra's own loop means a turn that has already made three tool calls on Gemini continues on Groq instead of starting over, and every agent, the artifact author and the specialists get it for free through the tier. `maxRetries: 0` on Gemini is deliberate: a daily quota 429 does not clear on a retry. `RERANK` cannot be a list because `src/modules/documents/rag.ts` builds one `ModelRouterLanguageModel` from it. Verified live: with an invalid Gemini key, an agent on `MODELS.ANALYST` answered from `openai/gpt-oss-120b` in 0.7s.
+**Cost:** Groq's free tier allows only 8,000 tokens per minute, so a long, tool heavy turn that falls back can hit Groq's own rate limit; the chat route's error message now says both providers are limited when that happens. Answers can differ in style between the two models within one conversation.
+
+## D-49 The chat sidebar reads conversations straight out of Mastra Memory; the thread id is also the session id
+26 Sep 2026, interface upgrade, `src/mastra/conversations.ts`, `app/app/api/conversations/`, `app/components/conversation-sidebar.tsx`.
+**Chose:** No new history store. Every turn was already saved to the orchestrator's Mastra Memory (LibSQL) under `memory: { thread, resource }`; the sidebar lists those threads (`memory.listThreads`, newest first), reopening one loads them with `memory.recall` and converts them to AI SDK v7 UI messages (`toAISdkMessages`) that seed `useChatRuntime({ messages })`, so the conversation continues where it left off. Because the same id keys the session manifest and evidence ledger (`resolveSessionId`), reopening a chat also brings back its uploaded files and generated artifacts. The open chat lives in the URL (`?c=<id>`). Titles come from the user's first message (`deriveConversationTitle`, `src/modules/session/title.ts`), set when the chat route creates the thread.
+**Over:** assistant-ui's `RemoteThreadListAdapter` (a second persistence layer to keep in sync with Mastra's), or Mastra Memory's own `generateTitle` (an extra model call per new conversation).
+**Because:** one source of truth for history, and zero extra model calls on a free tier quota. A truncated first line is also what users recognise.
+**Cost:** DuckDB is still one in-memory session per process (D-42), and it refuses new file registrations once it has run a query (M2's external access lockdown). So after a server restart a reopened chat has its messages, file list and previews, but its spreadsheets are no longer queryable until uploaded again. Rebuilding tables for a reopened chat needs a per conversation DuckDB session, which is out of scope here.
+
+## D-50 File previews are typed plans built on the server and resolved only through the conversation's manifest
+26 Sep 2026, interface upgrade, `src/modules/preview/`, `src/mastra/preview.ts`, `app/app/api/preview/`, `app/components/preview-panel.tsx`.
+**Chose:** Clicking an uploaded source or a generated file (in the Files panel, a composer chip, or a `/generated/...` link in an answer) opens a Claude style panel beside the chat. The server returns a `FilePreview` union built by deterministic code: first 100 rows per sheet for xlsx/csv (exceljs, csv-parse), HTML for docx (mammoth), each slide's text for pptx (jszip over the slide XML), raw bytes for PDF (the browser's own viewer), text for txt/json/md. The browser names a source id or artifact id, never a path; `resolvePreviewFile` looks it up in that conversation's manifest. Word HTML renders in an `<iframe sandbox="">` and carries its own `default-src 'none'` CSP. `Source.path` now records where an upload was saved; sources from before that are found by exact name under `data/uploads/` or `samples/`.
+**Over:** Rendering previews in the browser with client side parsers (a large bundle), converting everything to PDF (needs LibreOffice), or letting the browser pass a file path.
+**Because:** Rules 3 and 4 hold unchanged: nothing in a preview comes from a model, and file content is shown as data inside a sandbox that can run no script and fetch nothing. Resolving through the manifest means the preview route can only ever serve files that conversation holds.
+**Cost:** A pptx preview is a text outline, not a rendering; charts and images appear only in the downloaded file. `jszip` became a direct dependency (it was already installed through pptxgenjs, exceljs, docx and mammoth, so nothing new is downloaded), recorded here per CLAUDE.md.
+
+## D-51 The source id counter starts past every id already saved
+26 Sep 2026, interface upgrade, `src/modules/sources/registry.ts`, `src/mastra/session/manifestStore.ts`, `src/mastra/runtime.ts`.
+**Chose:** `createSourceRegistry({ startAfter })`, seeded on startup from `manifestStore.maxSourceNumber()` (the highest `src_N` in any saved manifest).
+**Over:** Random source ids.
+**Because:** found while testing the sidebar: the registry is in memory and restarted at `src_1` after every server restart, while manifests persist. A new upload in a reopened chat got the id of an old source, and `addSource` (keyed by id) silently replaced the old one. Persistent conversations make restarts routine, so this had to go. `src_N` stays because prompts, evidence ids and tests all use that shape.
+**Cost:** None found; a gap in the numbering after a restart is harmless.
+
+## D-52 The chat UI is restyled as a light, ChatGPT style layout
+26 Sep 2026, interface upgrade, `app/app/globals.css`, `app/app/assistant.tsx`, `app/components/`.
+**Chose:** White as the primary surface and near black as the secondary (ink, primary buttons, the send button), pure neutrals with no hue. Conversations in a collapsible left sidebar grouped by day with search, rename and delete; the chat centred at 48rem with a pill composer carrying an attach button and ChatGPT style attachment chips; the old left Sources panel moved to a right hand Files panel that shares its space with the preview. Colour appears only in the small file type tiles.
+**Over:** The scaffold's dark zinc theme with sources on the left.
+**Because:** the left column is where users expect conversation history, and files belong next to the preview they open into. Upload works from the composer, the Files panel, or drag and drop onto either.
+**Cost:** Dark mode is no longer offered; the `.dark` tokens remain in `globals.css` but nothing applies them.
+
 ---
 
 <!-- Append new decisions below as you make them. -->

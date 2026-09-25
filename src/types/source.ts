@@ -19,6 +19,8 @@ export type Source = {
   kind: SourceKind;
   origin: 'upload' | 'url';
   status: SourceStatus;
+  /** Absolute path of the uploaded file on disk, for the chat UI's file preview. Unset for URLs. Never sent to the browser. */
+  path?: string;
 
   // a source can be BOTH of these
   tables?: TableRef[]; // set when tabular, or when tables were found in a document

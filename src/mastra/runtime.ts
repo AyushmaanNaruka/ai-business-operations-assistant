@@ -65,9 +65,10 @@ export async function getRuntime(): Promise<Runtime> {
   if (!runtimePromise) {
     runtimePromise = (async () => {
       const session = await createSession('shared-runtime-session');
-      const registry = createSourceRegistry();
       const dbUrl = resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db');
       const [ledger, manifestStore] = await Promise.all([openLedger(dbUrl), openManifestStore(dbUrl)]);
+      // Past every source id any saved conversation already uses (registry.ts).
+      const registry = createSourceRegistry({ startAfter: await manifestStore.maxSourceNumber() });
 
       // Loads once on first tool call so Studio and a fresh chat both have
       // something to query and read immediately, same as Phase 2/3's original

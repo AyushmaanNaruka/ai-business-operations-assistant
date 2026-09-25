@@ -104,6 +104,16 @@ nothing.
 
 **Demonstrable:** the system behaving well when things go wrong, which is the part that separates submissions.
 
+### Saturday 27 September, interface upgrade
+
+- [x] Groq as an automatic fallback when Gemini fails, per LLM step (`src/mastra/models.ts`, D-48); verified live with an invalid Gemini key
+- [x] Conversation sidebar: every past chat listed newest first, grouped by day, searchable, rename and delete; reopening one restores its messages and files and continues where it left off (D-49)
+- [x] File preview panel beside the chat for uploaded sources and generated files: spreadsheets, PDFs, Word, decks, text (`src/modules/preview`, D-50)
+- [x] ChatGPT style light theme, upload from the composer with attachment chips, starter prompts (D-52)
+- [x] Source ids no longer collide after a server restart (D-51)
+
+**Demonstrable:** close the tab, restart the server, reopen the chat from the sidebar, click the spreadsheet to preview it, and keep asking.
+
 ---
 
 ## Sunday 28 September: submission
