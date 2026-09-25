@@ -111,6 +111,10 @@ nothing.
 - [x] File preview panel beside the chat for uploaded sources and generated files: spreadsheets, PDFs, Word, decks, text (`src/modules/preview`, D-50)
 - [x] ChatGPT style light theme, upload from the composer with attachment chips, starter prompts (D-52)
 - [x] Source ids no longer collide after a server restart (D-51)
+- [x] Gemini 3.5 Flash Lite added between Gemini Flash and Groq, since each Gemini model has its own daily quota (D-53); verified live with 2.5 Flash's quota spent
+- [x] Anthropic (Claude) and OpenAI (GPT) supported, switched on by their keys, paid first, with a provider allowlist and per tier overrides (D-54); wiring verified against both live APIs
+- [x] Security pass for sharing inside a company (docs/11-SECURITY.md): SSRF guard on research (D-55), chat route forwards only validated messages, id validation, rate limits, generic errors (D-56), optional password gate and security headers (D-57), audit advisories reviewed (D-58)
+- [x] The two flaky `readPage` tests fixed: a cold jsdom import under the full parallel run outlasted the 5s timeout. Full suite green, 477 tests
 
 **Demonstrable:** close the tab, restart the server, reopen the chat from the sidebar, click the spreadsheet to preview it, and keep asking.
 

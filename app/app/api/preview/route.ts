@@ -1,11 +1,14 @@
 import { previewForSession } from "@/mastra/preview";
 import { parsePreviewRequest } from "./target";
+import { enforceRateLimit, internalError } from "@ui/lib/server-security";
 
 // The preview panel's content for one source or generated file: a typed
 // FilePreview built by deterministic code (src/modules/preview), never by a model.
 export async function GET(req: Request) {
+  const limited = enforceRateLimit(req, "read");
+  if (limited) return limited;
   const parsed = parsePreviewRequest(req);
-  if (!parsed) return Response.json({ error: "Name a sourceId, artifactId or file to preview." }, { status: 400 });
+  if (!parsed) return Response.json({ error: "Name a valid conversation and a sourceId, artifactId or file to preview." }, { status: 400 });
   try {
     const result = await previewForSession(parsed.threadId, parsed.target);
     if (!result.ok) {
@@ -14,6 +17,6 @@ export async function GET(req: Request) {
     }
     return Response.json(result.data);
   } catch (err) {
-    return Response.json({ error: `Could not build a preview: ${(err as Error).message}` }, { status: 500 });
+    return internalError("Could not build a preview", err);
   }
 }

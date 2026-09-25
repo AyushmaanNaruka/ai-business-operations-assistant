@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The SSRF guard (urlSafety.ts) resolves every host before fetching; these tests
+// stub fetch, so DNS is stubbed too, to a public address, keeping them offline.
+vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '93.184.216.34', family: 4 }] }));
+
 const ORIGINAL_ENV = { ...process.env };
 
 describe('crawlSite() (link discovery fallback, no Firecrawl key)', () => {

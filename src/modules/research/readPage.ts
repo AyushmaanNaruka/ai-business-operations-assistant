@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import type { ToolResult } from '@/types';
 import { fail, ok } from '@/modules/reliability';
+import { checkPublicUrl, safeFetch } from './urlSafety';
 
 export type PageContent = { markdown: string; retrievedAt: string };
 
@@ -45,7 +46,11 @@ function textContentToMarkdown(textContent: string): string {
 async function readPageViaReadability(url: string): Promise<ToolResult<PageContent>> {
   let html: string;
   try {
-    const response = await fetch(url);
+    // safeFetch, not fetch: this path runs on this server, so it must not be
+    // steerable to an internal address, including through a redirect (D-55).
+    const fetched = await safeFetch(url);
+    if (!fetched.ok) return fetched;
+    const response = fetched.data;
     if (!response.ok) {
       return fail('PAGE_BLOCKED', `Could not fetch "${url}" directly either: HTTP ${response.status}.`, { recoverable: false });
     }
@@ -80,6 +85,11 @@ async function readPageViaReadability(url: string): Promise<ToolResult<PageConte
  * hit's `retrievedAt` honestly pinned to when the page was first read.
  */
 export async function readPage(url: string): Promise<ToolResult<PageContent>> {
+  // Refuse internal addresses before either path runs (D-55): the fallback fetches
+  // from this server, and an intranet URL should not be sent to a third party either.
+  const checked = await checkPublicUrl(url);
+  if (!checked.ok) return checked;
+
   const jina = await readPageViaJina(url);
   if (jina.ok) return jina;
 

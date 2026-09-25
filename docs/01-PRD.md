@@ -34,7 +34,7 @@ A chat interface where the user can:
 | Run arbitrary generated code | SQL plus a stats library covers the realistic question space with no sandbox to secure |
 | Connect to live CRMs or databases | Not in the brief. The unsupported path handles the ask cleanly |
 | Parse legacy `.doc` and `.xls` | The only parsers are abandoned. Detected and reported |
-| User accounts, auth, multi tenancy | The brief says explicitly not to build a production platform |
+| User accounts, roles, multi tenancy | The brief says explicitly not to build a production platform. For sharing inside a company there is one optional shared password gate (docs/11-SECURITY.md, D-57), not accounts |
 | Deployment infrastructure | Runs locally, one command |
 
 Naming these is part of the deliverable. They are decisions, not omissions.

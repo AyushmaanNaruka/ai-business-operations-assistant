@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { ingestForSession } from "@/mastra/runtime";
+import { enforceRateLimit, internalError, invalidSessionIdResponse, readSessionId } from "@ui/lib/server-security";
 
 // docs/03-ARCHITECTURE.md Part 10 gap 4 / PROMPTBOOK P7.2: uploads stream straight
 // to disk, never buffered into memory, and type + size are checked BEFORE the
@@ -43,8 +44,11 @@ function capBytes(limit: number): Transform {
 }
 
 export async function POST(req: Request) {
+  const limited = enforceRateLimit(req, "upload");
+  if (limited) return limited;
   const url = new URL(req.url);
-  const threadId = url.searchParams.get("threadId") || "default-thread";
+  const threadId = readSessionId(url.searchParams.get("threadId"));
+  if (!threadId) return invalidSessionIdResponse();
   const rawName = url.searchParams.get("name") || "upload";
   const name = basename(rawName); // strips any path component a client could smuggle in
 
@@ -89,7 +93,7 @@ export async function POST(req: Request) {
     if (err instanceof UploadTooLargeError) {
       return Response.json({ error: err.message }, { status: 413 });
     }
-    return Response.json({ error: `Could not save "${name}": ${(err as Error).message}` }, { status: 500 });
+    return internalError(`Could not save "${name}"`, err);
   }
 
   // Returns immediately with a `pending` source card; ingestForSession finishes
@@ -102,6 +106,6 @@ export async function POST(req: Request) {
     const source = await ingestForSession(threadId, { path: diskPath });
     return Response.json({ source });
   } catch (err) {
-    return Response.json({ error: `"${name}" was saved but could not be registered: ${(err as Error).message}` }, { status: 500 });
+    return internalError(`"${name}" was saved but could not be registered`, err);
   }
 }

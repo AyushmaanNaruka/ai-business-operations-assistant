@@ -145,6 +145,8 @@ That is a gift for the interview. The right answer to "why this architecture" is
 |---|---|---|---|
 | **Google Gemini Flash** | Free, roughly 10 to 15 requests/min and 1,000 to 1,500 requests/day, very large context | Excellent, mature function calling | **Primary** |
 | **Groq** | Free, 30 requests/min, 1,000/day, but only 8,000 tokens/min | Excellent, all models support tools | **Fallback and fast/cheap tier** |
+| **Anthropic (Claude)** | Paid. Added 26 Sep 2026 for company deployments | Excellent; Claude Opus 5 rejects sampling parameters, which this code never sets | **Primary when `ANTHROPIC_API_KEY` is set** |
+| **OpenAI (GPT)** | Paid. Added 26 Sep 2026 for company deployments | Excellent | **Primary when `OPENAI_API_KEY` is set and Anthropic is not** |
 | OpenRouter | 50 requests/day free, or 1,000/day after a one time ~$10 top up | Inconsistent on free models | Escape hatch only |
 | Cerebras | Now a 30 day $5 trial needing card verification, 5 requests/min | Fine, but 5 rpm kills agent loops | Skip |
 
@@ -152,7 +154,7 @@ That is a gift for the interview. The right answer to "why this architecture" is
 
 Note: Google removed the per model free tier table from their docs. Check your live quota at aistudio.google.com/rate-limit before the demo.
 
-(Updated 26 Sep 2026: the Groq fallback is now automatic. `MODELS.ANALYST` and `MODELS.WRITER` are Mastra model fallback lists, Gemini first and Groq second, so a Gemini quota error re-runs the step on Groq. See docs/DECISIONS.md D-48.)
+(Updated 26 Sep 2026: Anthropic and OpenAI are supported through the same Mastra model router, with no new dependency: a key switches a provider on and paid providers lead each chain. `MODEL_PROVIDERS` keeps company data off free tiers. See docs/DECISIONS.md D-54. Earlier the same day: the Groq fallback became automatic. `MODELS.ANALYST` and `MODELS.WRITER` are Mastra model fallback lists: Gemini 2.5 Flash, Gemini 3.5 Flash Lite, then Groq, so a quota error re-runs the step on the next model. See docs/DECISIONS.md D-48 and D-53. Measured 26 Sep: the free tier for gemini-2.5-flash is now 20 requests per day per project, far below the figures in the table above.)
 
 ### 2.3 Numerical analysis: the most important technical decision
 

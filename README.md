@@ -19,7 +19,11 @@ cd app && npm run dev        # chat UI at localhost:3000
 
 Full setup, including free tier key sources: `docs/10-SETUP.md`
 
-The chat UI keeps every conversation in a left sidebar (reopen one to continue where you left off, files included), previews uploaded and generated files beside the chat, and answers on Gemini 2.5 Flash with Groq as an automatic fallback when Gemini is unavailable.
+The chat UI keeps every conversation in a left sidebar (reopen one to continue where you left off, files included) and previews uploaded and generated files beside the chat.
+
+**Models.** It runs free on Gemini and Groq for development, and on Claude or GPT once a company adds `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`: every provider with a key is used, paid first, each falling back to the next. `MODEL_PROVIDERS` keeps company data off free tiers. See `docs/10-SETUP.md`, "Choosing models".
+
+**Before sharing it with a team,** read `docs/11-SECURITY.md`: set a password (`APP_ACCESS_PASSWORD`), serve over HTTPS, and restrict providers. Research refuses internal addresses, API routes forward only validated input, and requests are rate limited.
 
 ---
 

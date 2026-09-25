@@ -101,6 +101,9 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 | E11 | Conversation context | Manifest plus Mastra Memory plus reference resolution | Yes | [ ] |
 | E12 | Cost and latency | Model tiers, on demand skills, parse cache, row caps, parallel delegation | Yes | [ ] |
 | Extra | File content is data, never instruction | Orchestrator rule 9. Not asked for, worth having | Yes | [ ] |
+| Extra | Provider choice | Anthropic, OpenAI, Gemini and Groq, switched on by their keys, paid first, with an allowlist (D-54) | Yes | [x] |
+| Extra | Security for a shared deployment | SSRF guard, validated routes, rate limits, optional password gate, security headers (docs/11-SECURITY.md, D-55 to D-58) | Yes | [x] |
+| Extra | Conversation history and file preview | Sidebar over Mastra Memory, Claude style preview panel (D-49, D-50) | Yes | [x] |
 
 ## I. Submission deliverables
 
@@ -126,4 +129,4 @@ None outstanding against the brief after three review passes. Everything in sect
 The two risks that remain are execution risks, not design gaps:
 
 1. **Time.** The artifact renderers are the most likely thing to run late. If Saturday slips, ship Excel and PowerPoint only; that still satisfies "at least two generated business artifacts".
-2. **Free tier limits.** Gemini and Exa quotas are generous but finite. Cache aggressively, and do a full dry run of both demo scenarios on Sunday morning while there is still quota to recover from a mistake.
+2. **Free tier limits.** Gemini and Exa quotas are finite: on 26 Sep 2026 the free tier for gemini-2.5-flash was measured at 20 requests a day. Cache aggressively, and do a full dry run of both demo scenarios on Sunday morning while there is still quota to recover from a mistake. The fallback chain (Gemini Flash, Flash Lite, Groq) softens this, and a paid Anthropic or OpenAI key removes it (D-53, D-54).

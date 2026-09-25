@@ -1,5 +1,6 @@
 import type { ToolResult } from '@/types';
 import { fail, ok } from '@/modules/reliability';
+import { checkPublicUrl, safeFetch } from './urlSafety';
 import { readPage } from './readPage';
 
 /** A crawled page: the same shape a research page becomes once it joins the document pipeline (marker.ts's formatWebMarker). */
@@ -108,7 +109,10 @@ async function crawlViaDiscovery(domain: string, maxPages: number): Promise<Tool
 
   let homepageHtml: string;
   try {
-    const response = await fetch(startUrl);
+    // safeFetch: the homepage is fetched from this server (D-55).
+    const fetched = await safeFetch(startUrl);
+    if (!fetched.ok) return fetched;
+    const response = fetched.data;
     if (!response.ok) {
       return fail('PAGE_BLOCKED', `Could not fetch homepage "${startUrl}": HTTP ${response.status}.`, { recoverable: false });
     }
@@ -137,6 +141,8 @@ async function crawlViaDiscovery(domain: string, maxPages: number): Promise<Tool
  * per-task page cap that protects the month's search/read quota.
  */
 export async function crawlSite(domain: string, maxPages: number): Promise<ToolResult<PageRef[]>> {
+  const checked = await checkPublicUrl(toStartUrl(domain));
+  if (!checked.ok) return checked;
   const cap = Math.max(0, Math.min(maxPages, RESEARCH_MAX_PAGES));
   if (cap === 0) return ok([]);
 

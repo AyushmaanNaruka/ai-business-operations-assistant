@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import { resolvePreviewFile } from "@/mastra/preview";
 import { parsePreviewRequest } from "../target";
+import { enforceRateLimit, internalError } from "@ui/lib/server-security";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -18,6 +19,8 @@ const CONTENT_TYPES: Record<string, string> = {
 // conversation's manifest (src/mastra/preview.ts), so it can only serve a file
 // the conversation holds, never an arbitrary path.
 export async function GET(req: Request) {
+  const limited = enforceRateLimit(req, "read");
+  if (limited) return limited;
   const parsed = parsePreviewRequest(req);
   if (!parsed) return Response.json({ error: "Name a sourceId, artifactId or file." }, { status: 400 });
   try {
@@ -38,6 +41,6 @@ export async function GET(req: Request) {
     if (ext !== ".pdf") headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
     return new Response(new Uint8Array(data), { headers });
   } catch (err) {
-    return Response.json({ error: `Could not read that file: ${(err as Error).message}` }, { status: 500 });
+    return internalError("Could not read that file", err);
   }
 }

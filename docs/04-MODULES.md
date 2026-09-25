@@ -154,7 +154,9 @@ crawlSite(domain, maxPages): Promise<ToolResult<PageRef[]>>
 - Every page records `retrievedAt`
 - Quota exhaustion returns `SEARCH_QUOTA`, the agent reports it as a gap, and the orchestrator answers from the user's own data while saying research was unavailable. It does not invent competitor facts
 
-**Tests:** fallback fires when the primary errors, the page cap holds, quota exhaustion produces a gap rather than an answer.
+**Public addresses only** (`urlSafety.ts`, D-55): `checkPublicUrl(url)` runs before any read or crawl and refuses non http(s) schemes, embedded credentials, and any host resolving to a loopback, private, link local (cloud metadata), CGNAT or IPv6 internal address. `safeFetch(url)` is the only way the server itself fetches a researched URL: redirects are followed by hand and each hop is checked again. `RESEARCH_ALLOW_PRIVATE_URLS=1` switches the guard off.
+
+**Tests:** fallback fires when the primary errors, the page cap holds, quota exhaustion produces a gap rather than an answer; cloud metadata, `localhost`, a public name resolving privately, and a public page redirecting inward are all refused.
 
 ---
 
@@ -275,7 +277,9 @@ Two layers. **Mastra Memory** holds conversation history in threads backed by Li
 
 **Reference resolution:** "the target company", "the other one", "this" resolve against the manifest. If a reference cannot be resolved, ask one short question rather than guessing.
 
-**Tests:** the manifest survives a restart; a reference to a source that does not exist produces a question, not an assumption.
+**Conversations in the UI** (added 26 Sep 2026, D-49): the chat sidebar lists Mastra Memory threads (`src/mastra/conversations.ts`), and the thread id doubles as the manifest's session id, so reopening a chat restores its files too. `title.ts` derives a thread's title from the first user message with no model call; `ids.ts` validates every session id that arrives from the browser (D-56).
+
+**Tests:** the manifest survives a restart; a reference to a source that does not exist produces a question, not an assumption; titles are trimmed at a word boundary and placeholder titles are recognised; malformed ids are refused.
 
 ---
 
@@ -298,3 +302,30 @@ Plus the capability list the orchestrator uses to answer unsupported requests wi
 **Long running work:** anything expected past about 20 seconds runs as a Mastra workflow run with an ID, streaming step level progress, rather than as a long HTTP request.
 
 **Tests:** every error code maps to a class; retry gives up after the stated attempts; no tool in the codebase throws (assert with a lint rule or a test that walks the tool registry).
+
+**Rate limiting** (`rateLimit.ts`, D-56): a fixed window, in memory limiter the API routes use per client and bucket, so an open chat endpoint cannot run up a paid model bill. A limit of 0 switches it off; memory is bounded by evicting expired keys.
+
+---
+
+## M10. File Preview
+`src/modules/preview/`, resolved through `src/mastra/preview.ts`
+
+**Job:** let the user look at an uploaded source or a generated file beside the chat without downloading it (D-50).
+
+**Surface**
+
+```ts
+previewFile(path): Promise<ToolResult<FilePreview>>
+```
+
+| File | Preview |
+|---|---|
+| `.xlsx`, `.csv` | first 100 rows per sheet, plus the true row count |
+| `.pdf` | `{ type: 'pdf' }`: the browser's own viewer shows the raw file |
+| `.docx` | HTML from mammoth, rendered in a sandboxed iframe with a no script CSP |
+| `.pptx` | each slide's text in order, first paragraph as the title (read with jszip) |
+| `.md`, `.txt`, `.json` | text, truncated at 200,000 characters |
+
+**Decisions already made:** no model involved (rules 3 and 4); the browser names a source or artifact id and `resolvePreviewFile` finds the file through that conversation's manifest, never from a browser supplied path.
+
+**Tests:** each format previews from the samples; a missing file, an unsupported extension and a corrupt workbook fail without throwing; slide XML entities decode.

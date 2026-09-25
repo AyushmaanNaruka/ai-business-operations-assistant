@@ -4,6 +4,9 @@ dist/
 build/
 .env
 .env.local
+# Every other env file too (.env.production, .env.staging, ...): they hold API keys.
+.env.*
+!.env.example
 *.log
 .mastra/
 data/*.db

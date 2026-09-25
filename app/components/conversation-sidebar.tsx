@@ -147,8 +147,7 @@ export function ConversationSidebar({ conversations, isLoading, error, activeId,
 
       <div className="border-sidebar-border text-muted-foreground shrink-0 border-t px-4 py-3 text-xs leading-relaxed">
         Answers are computed from your files and cited.
-        <br />
-        Gemini 2.5 Flash, Groq as fallback.
+        <ModelStatus />
       </div>
 
       <Dialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
@@ -184,6 +183,36 @@ export function ConversationSidebar({ conversations, isLoading, error, activeId,
         </DialogContent>
       </Dialog>
     </nav>
+  );
+}
+
+/** Shortens "anthropic/claude-opus-5" to "claude-opus-5", "groq/openai/gpt-oss-120b" to "gpt-oss-120b". */
+function modelName(id: string): string {
+  return id.split("/").pop() ?? id;
+}
+
+/** The model this deployment answers with, and how many fallbacks stand behind it (from /api/status). */
+function ModelStatus() {
+  const [models, setModels] = useState<string[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { models?: { analyst?: string[] } } | null) => {
+        if (!cancelled && data?.models?.analyst) setModels(data.models.analyst);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!models || models.length === 0) return null;
+  const [primary, ...fallbacks] = models;
+  return (
+    <span className="block" title={models.join(" > ")}>
+      Model: {modelName(primary!)}
+      {fallbacks.length > 0 && `, ${fallbacks.length} fallback${fallbacks.length > 1 ? "s" : ""}`}
+    </span>
   );
 }
 

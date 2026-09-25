@@ -23,7 +23,48 @@ try {
 // with no changes to them.
 process.env.INIT_CWD = resolve(__dirname, "..");
 
+/**
+ * Browser security headers (docs/DECISIONS.md D-57). The CSP allows only this
+ * origin: no third party script, frame, font or connection. 'unsafe-inline' on
+ * scripts is what Next.js needs without a nonce setup, and 'unsafe-eval' plus the
+ * websocket are dev only (Fast Refresh). frame-src 'self' is what lets the preview
+ * panel frame /api/preview/file; frame-ancestors stops anyone else framing the app.
+ */
+const isDev = process.env.NODE_ENV !== "production";
+const CSP = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  `connect-src 'self'${isDev ? " ws: wss:" : ""}`,
+  "frame-src 'self'",
+  "frame-ancestors 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
+const BASE_HEADERS = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  ...(isDev ? [] : [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]),
+];
+
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  async headers() {
+    return [
+      { source: "/:path*", headers: BASE_HEADERS },
+      // Not on the raw file route: Chrome's built in PDF viewer will not render a
+      // document served with object-src 'none', and that route sets its own
+      // sandbox CSP for every non PDF file (app/app/api/preview/file/route.ts).
+      { source: "/((?!api/preview/file).*)", headers: [{ key: "Content-Security-Policy", value: CSP }] },
+    ];
+  },
   // Mastra (and everything it transitively pulls in: DuckDB's native bindings,
   // libsql, Puppeteer, exceljs, pptxgenjs, docx, mammoth, unpdf) must run as real
   // Node modules on the server, never get bundled by webpack/Turbopack — several

@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The SSRF guard (urlSafety.ts) resolves every host before fetching; these tests
+// stub fetch, so DNS is stubbed too, to a public address, keeping them offline.
+vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '93.184.216.34', family: 4 }] }));
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -14,6 +18,15 @@ const SAMPLE_HTML = `
   </body>
 </html>
 `;
+
+// Each test imports readPage afresh (vi.resetModules), and the first import pays the
+// cold load of jsdom and Readability: about 6s when the whole suite runs in parallel,
+// past the default 5s test timeout, after which the timed out test's calls leaked
+// into the next test's fetch mock. Warming the import once here, with room to
+// spare, is what made these two tests stop failing only in full runs.
+beforeAll(async () => {
+  await import('./readPage');
+}, 60_000);
 
 describe('readPage()', () => {
   const fetchMock = vi.fn();

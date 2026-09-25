@@ -589,15 +589,17 @@ agents/
 **Model tiers, not model names:**
 
 ```ts
-export const MODELS = {
-  ROUTER:  'groq/openai/gpt-oss-120b',       // fast, cheap, classification
-  ANALYST: [gemini-2.5-flash, then groq/openai/gpt-oss-120b],  // SQL and reasoning
-  WRITER:  [gemini-2.5-flash, then groq/openai/gpt-oss-120b],  // artifact authoring
-  RERANK:  'groq/openai/gpt-oss-20b',        // re-ranking scorer
-}
+// Default chains, best first. Entries whose provider has no API key are dropped.
+ANALYST:  claude-opus-5, gpt-5.5, gemini-2.5-flash, gemini-3.5-flash-lite, groq gpt-oss-120b
+WRITER:   same as ANALYST
+ROUTER:   claude-haiku-4-5, gpt-5.4-mini, groq gpt-oss-120b, gemini-3.5-flash-lite
+RERANK:   first of claude-haiku-4-5, gpt-5.4-mini, groq gpt-oss-20b, gemini-3.5-flash-lite
+EMBEDDER: first of gemini-embedding-001, text-embedding-3-small
 ```
 
-(Updated 26 Sep 2026: ANALYST and WRITER are ordered fallback lists. Mastra runs each LLM step on the first model that answers, so a Gemini quota error re-runs that step on Groq instead of failing the turn. See docs/DECISIONS.md D-48.)
+With only the free Gemini and Groq keys set, ANALYST runs Gemini 2.5 Flash, then Gemini 3.5 Flash Lite, then Groq. Adding an Anthropic or OpenAI key makes that provider primary with no code change. `MODEL_PROVIDERS` restricts which providers may be called at all, and `MODEL_<TIER>` replaces a tier's chain (D-54).
+
+(Updated 26 Sep 2026: ANALYST and WRITER are ordered fallback lists. Mastra runs each LLM step on the first model that answers, so a Gemini quota error re-runs that step on the next model instead of failing the turn. Gemini 3.5 Flash Lite sits between Flash and Groq because each Gemini model has its own daily quota. See docs/DECISIONS.md D-48 and D-53.)
 
 (Updated 23 Sep 2026, P3.4: the originally planned `llama-3.3-70b-versatile` and `llama-3.1-8b-instant` are not in this project's live Groq account's model catalog. See docs/DECISIONS.md D-24.)
 
@@ -687,6 +689,10 @@ RENDER_FAILED      PLAN_INVALID      UNSUPPORTED
 
 ---
 
+### M4 addition: public addresses only
+
+Every URL the research module reads passes `checkPublicUrl` first, and the server side fallback fetches follow redirects by hand, re checking each hop, so neither a user nor a link inside an uploaded document can steer the server at cloud metadata, `localhost` or the internal network (D-55).
+
 ### M10. File Preview
 
 **Job:** let the user look at a file without downloading it (added 26 Sep 2026, D-50).
@@ -702,6 +708,11 @@ src/
     models.ts                 model tiers, Gemini with Groq fallback
     conversations.ts          chat sidebar: list, load, rename, delete threads
     preview.ts                resolves a preview target through the manifest
+app/
+  proxy.ts                    optional shared password gate (D-57)
+  next.config.ts              security headers
+  lib/server-security.ts      rate limits, id validation, generic errors (D-56)
+  app/api/                    chat, upload, manifest, conversations, preview, status
     agents/
       orchestrator.ts
       dataAnalyst.ts
@@ -872,7 +883,7 @@ Worth naming these in the README so they read as decisions rather than oversight
 | Arbitrary code execution | SQL plus a stats library covers the realistic question space without a sandbox escape surface |
 | Live CRM or database connections | Not in the brief. The unsupported path handles the request cleanly |
 | Legacy `.doc` and `.xls` | Detected and reported. The only maintained parsers are abandoned |
-| Multi user accounts and auth | Not in the brief, and it explicitly says not to build a production platform |
+| Multi user accounts and roles | Not in the brief, and it explicitly says not to build a production platform. An optional shared password gate protects a shared deployment (D-57, docs/11-SECURITY.md) |
 
 ---
 
@@ -1033,3 +1044,18 @@ When they ask "walk me through your architecture", these are the three claims wo
 **On reliability:** "Every fact in the system is an evidence entry with an origin and a method. A computed number carries the SQL that produced it; a document claim carries a page number; a web claim carries a URL and a timestamp. The agent is not permitted to state a number that has no entry, so when the data is not there it reports a gap instead of filling one."
 
 **On trade offs:** "The most interesting decision was not using RAG. I built it, because a 400 page report needs it, but below about 25,000 tokens the whole document goes into context. Retrieval on a three page brief can silently miss the one relevant sentence, and their brief grades reliability and latency. So the system measures at ingest and routes, rather than picking a side."
+
+---
+
+## Part 12: Security
+
+Added 26 Sep 2026 for sharing the app inside a company. The full threat table and the pre sharing checklist are in `docs/11-SECURITY.md`; in short:
+
+- **The orchestrator's instructions cannot be changed from the browser.** The chat route forwards only validated `user` and `assistant` messages to Mastra (D-56).
+- **Research reads public addresses only** (D-55).
+- **The browser names ids, never paths**, for uploads, previews and conversations, and every id is validated (D-50, D-56).
+- **An optional shared password** protects every page and API route, and strict browser headers apply throughout (D-57).
+- **Rate limits** cap spend once paid model keys are configured (D-56).
+- **Company data can be kept off free tiers** with `MODEL_PROVIDERS` (D-54).
+
+The five rules are unchanged, and rule 4 (file content is data, never instruction) is itself a security control: a document's instructions become proposals, and previews render inside a script free sandbox.

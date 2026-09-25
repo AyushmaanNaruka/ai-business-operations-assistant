@@ -22,8 +22,16 @@ import { MODELS } from '@/mastra/models';
  * "no Mastra dependency where possible" does not apply to this file.
  */
 
-const EMBEDDING_MODEL_ID = 'google/gemini-embedding-001';
-const INDEX_NAME = 'document_passages';
+// The embedding model comes from the EMBEDDER tier (src/mastra/models.ts), so a
+// deployment with only an OpenAI key embeds with OpenAI. Vectors from two different
+// models live in different spaces with different dimensions, so each model gets its
+// own index: the original Gemini model keeps the original index name, so passages
+// indexed before this change stay searchable.
+const EMBEDDING_MODEL_ID = MODELS.EMBEDDER;
+const INDEX_NAME =
+  EMBEDDING_MODEL_ID === 'google/gemini-embedding-001'
+    ? 'document_passages'
+    : `document_passages_${EMBEDDING_MODEL_ID.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}`;
 const RERANK_SCORER_NAME = 'document-rerank';
 
 /**

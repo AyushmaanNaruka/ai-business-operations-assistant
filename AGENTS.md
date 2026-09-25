@@ -16,7 +16,7 @@ This is a take-home assignment for an AI Engineer role. Due **Monday 28 Septembe
 |---|---|
 | Language | TypeScript. No JavaScript files, no `any` without a comment explaining why |
 | Framework | Mastra. Agents, workflows, memory, RAG and skills all come from Mastra, not LangChain |
-| Cost | Free tiers only. Gemini Flash and Groq for models, Exa/Tavily and Jina for research |
+| Cost | Free tiers by default: Gemini Flash and Groq for models, Exa/Tavily and Jina for research. Paid Anthropic and OpenAI models are optional, switched on by their keys (D-54) |
 | Architecture | Supervisor plus subagents, maximum two levels deep. Never use `Agent.network()`, it is deprecated |
 
 ## The five rules that define this system
@@ -48,6 +48,7 @@ Break any of these and the submission loses its main differentiator.
 | Demo scenarios to build against | `docs/08-DEMO-SCENARIOS.md` |
 | Test strategy and grounding evals | `docs/09-TESTING.md` |
 | Install and run | `docs/10-SETUP.md` |
+| Security controls and the pre sharing checklist | `docs/11-SECURITY.md` |
 | Decision log, append as you go | `docs/DECISIONS.md` |
 | **Phased prompt book for the whole build** | `docs/PROMPTBOOK.md` |
 
@@ -59,7 +60,8 @@ Break any of these and the submission loses its main differentiator.
 - **One concept per file** in `src/types/`. Import types, do not redefine them.
 - **Modules do not import agents.** `src/modules/*` is pure logic with no Mastra dependency where possible, so it is unit testable without a model. `src/mastra/*` wires modules into tools and agents.
 - **No secrets in code.** Everything through `process.env`, declared in `.env.example`.
-- **Model tiers, not model names.** Use `MODELS.ANALYST`, never a hardcoded string, so swapping provider is one file.
+- **Model tiers, not model names.** Use `MODELS.ANALYST`, never a hardcoded string, so swapping provider is one file. Tiers are fallback chains built from whichever provider keys are set (`src/mastra/models.ts`).
+- **Never forward a request body wholesale.** API routes pass on only the fields they validated (docs/11-SECURITY.md).
 - **Prose style in generated docs and comments:** no double dashes, they read as machine written.
 
 ## Directory map
@@ -110,4 +112,4 @@ tests/grounding/      the four no fabrication evals
 
 ## Out of scope, do not build
 
-OCR for scanned PDFs (detect and report instead), arbitrary code execution or sandboxes, live CRM or database connectors, legacy `.doc` and `.xls` parsing (detect and report), user accounts and auth, deployment infrastructure.
+OCR for scanned PDFs (detect and report instead), arbitrary code execution or sandboxes, live CRM or database connectors, legacy `.doc` and `.xls` parsing (detect and report), user accounts and roles (an optional shared password gate exists, D-57), deployment infrastructure.

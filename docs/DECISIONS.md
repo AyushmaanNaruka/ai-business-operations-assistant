@@ -379,6 +379,48 @@ Date, one line of context
 **Because:** the left column is where users expect conversation history, and files belong next to the preview they open into. Upload works from the composer, the Files panel, or drag and drop onto either.
 **Cost:** Dark mode is no longer offered; the `.dark` tokens remain in `globals.css` but nothing applies them.
 
+## D-53 Gemini 3.5 Flash Lite goes between Gemini Flash and Groq in the fallback chain
+26 Sep 2026, interface upgrade follow up, `src/mastra/models.ts`.
+**Chose:** `MODELS.ANALYST` and `MODELS.WRITER` are now `[gemini-2.5-flash, gemini-3.5-flash-lite, groq/openai/gpt-oss-120b]`, both Gemini entries with `maxRetries: 0`.
+**Over:** Gemini Flash straight to Groq (D-48), or moving the primary to a newer Gemini model.
+**Because:** measured live on 26 Sep: the free tier for `gemini-2.5-flash` on this project is 20 requests per day per model (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), and one multi specialist question spends several. Once it ran out, turns went to Groq, whose 8,000 tokens per minute cap is smaller than one tool heavy turn, so they failed anyway (Groq still had 994 of 1,000 daily requests left). Gemini quotas are per model, so Flash Lite brings a fresh daily quota on the same key and a large context window. Probed the alternatives the same day: `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` and `gemini-flash-latest` answered; `gemini-3.5-flash` and `gemini-3.8-flash` returned 503 high demand; `gemini-2.5-flash-lite` is retired for new users. A pinned model beats the `-latest` alias, which can change underneath a graded submission. Verified: with 2.5 Flash's quota spent, an agent on `MODELS.ANALYST` was answered by the second entry in 1.5s without reaching Groq.
+**Cost:** Flash Lite reasons less well than Flash on the longest synthesis turns, so answers from later in the day may be plainer. The primary stays 2.5 Flash, so the models the grounding evals were built against are unchanged whenever its quota is available.
+
+## D-54 Four model providers, switched on by their API keys, paid first
+26 Sep 2026, provider support, `src/mastra/models.ts`, `src/modules/documents/rag.ts`, `.env.example`.
+**Chose:** Every tier is built by `buildModelTiers(process.env)` from a default chain per tier that lists Anthropic, OpenAI, Google and Groq models best first. Entries whose provider has no key are dropped, so setting `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` makes Claude (`claude-opus-5`, `claude-haiku-4-5` for the small tiers) or GPT (`gpt-5.5`, `gpt-5.4-mini`) primary with no code change, and the free models stay as fallbacks. `MODEL_PROVIDERS` is an allowlist that removes providers entirely; `MODEL_ANALYST`, `MODEL_WRITER`, `MODEL_ROUTER`, `MODEL_RERANK`, `MODEL_EMBEDDER` replace a tier's chain. The embedder became a tier too (Gemini or OpenAI; Anthropic and Groq have none), with one vector index per embedding model so vectors of different dimensions never mix; the original Gemini index keeps its name.
+**Over:** A separate Anthropic SDK or OpenAI SDK client, or a single `MODEL_PROVIDER=` switch.
+**Because:** Mastra's model router already ships the OpenAI and Anthropic providers and reads their standard key variables, so a `provider/model` string is the whole integration and AGENTS.md's "Mastra for models" rule holds. Key presence is the one signal an administrator already controls; the allowlist exists because free tiers' terms may allow providers to use prompts, which company data should not reach. Verified live: with dummy Anthropic and OpenAI keys the chain reached both real APIs (`authentication_error`, "Incorrect API key"), then fell through to Gemini, which answered. No new dependency.
+**Cost:** The OpenAI defaults (`gpt-5.5`, `gpt-5.4-mini`) are taken from Mastra's provider registry, not tested with a live key here; override them per tier if the company standardises on others. Claude Opus 5 rejects sampling parameters, which no agent here sets; keep it that way.
+
+## D-55 Research refuses private and internal addresses (SSRF guard)
+26 Sep 2026, security pass, `src/modules/research/urlSafety.ts`, `readPage.ts`, `crawlSite.ts`.
+**Chose:** `checkPublicUrl` runs before any URL is read or crawled: http(s) only, no embedded credentials, not `localhost`/`.local`/`.internal`, and every address the host resolves to must be public (loopback, RFC 1918, link local including cloud metadata, CGNAT, IPv6 unique local and link local, multicast all refused). The server side fallback fetches go through `safeFetch`, which follows redirects by hand and re checks each hop. `RESEARCH_ALLOW_PRIVATE_URLS=1` switches it off for a trusted single user deployment.
+**Over:** No guard (the previous state), or a hostname denylist only.
+**Because:** found in the security pass: `readPage` and `crawlSite` fell back to a direct `fetch(url)` from this server and followed redirects. A URL from a user, or planted in an uploaded document, could have made the server read `169.254.169.254` or internal services and relay the content into the chat. A denylist of names misses a public name that resolves privately, and a redirect from a public page. Tests stub DNS so they stay offline.
+**Cost:** A DNS answer that changes between the check and the connection (rebinding) is not fully closed; that needs connection pinning. Documented in docs/11-SECURITY.md.
+
+## D-56 API routes forward only what they validate
+26 Sep 2026, security pass, `app/app/api/*`, `app/lib/server-security.ts`, `src/modules/reliability/rateLimit.ts`, `src/modules/session/ids.ts`.
+**Chose:** The chat route passes `handleChatStream` exactly `{ messages, trigger, memory }` and keeps only `user` and `assistant` messages with a parts array (at most 400, body capped by `CHAT_MAX_BODY_MB`). Every route validates conversation ids (`isValidSessionId`: 1 to 128 of `[A-Za-z0-9_-]`) and preview tokens, applies a per client fixed window rate limit (chat 20, upload 30, read 300 per minute, configurable, 0 switches one off), and answers internal failures with a generic message plus a short reference id logged server side.
+**Over:** The previous `{ ...params, memory }` spread of the whole request body, `default-thread` fallbacks for a missing id, and `err.message` echoed in 500 responses.
+**Because:** `handleChatStream`'s params are Mastra's full agent execution options, including `instructions`, `system`, `toolsets` and `clientTools`: the spread let any client rewrite the orchestrator's instructions, bypassing the grounding rules, or attach tools. A client supplied `system` message would have reached the model as an instruction (rule 4). With paid keys, an unthrottled chat endpoint is a way to spend money. Verified: an injected `system` message and an `instructions` field are dropped (400, no valid messages), a `../` id is refused.
+**Cost:** In memory limits reset on restart and, without `TRUST_PROXY=1` behind a proxy, all callers share one bucket. Acceptable for a single process deployment (D-42).
+
+## D-57 An optional shared password and strict browser headers
+26 Sep 2026, security pass, `app/proxy.ts`, `app/next.config.ts`.
+**Chose:** When `APP_ACCESS_PASSWORD` is set, Next.js 16's `proxy.ts` (the renamed middleware, Node runtime) requires HTTP Basic credentials on every page and API route, compared in constant time; unset, the app stays open for local development. `next.config.ts` sends a CSP allowing only this origin (dev adds `unsafe-eval` and websockets for Fast Refresh), `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`, `nosniff`, a strict referrer policy, a permissions policy with camera and microphone off, HSTS in production, and no `X-Powered-By`. The raw file route is excluded from the CSP because Chrome's PDF viewer will not render under `object-src 'none'`; it sets its own sandbox CSP for non PDF files.
+**Over:** User accounts (out of scope per AGENTS.md), or no gate at all.
+**Because:** the app is about to be shared inside a company, and without a gate anyone who can reach the port can read every conversation and file and spend the model keys. One shared credential is the smallest control that closes that, and it composes with a company SSO proxy in front. Verified: no credentials and a wrong password get 401, the right one passes, the gate is off when unset; the page, the Word preview and the PDF preview all load under the CSP with no violations.
+**Cost:** Everyone with the password sees every conversation. Basic credentials must travel over HTTPS.
+
+## D-58 Two npm audit advisories are accepted, not force fixed
+26 Sep 2026, security pass.
+**Chose:** Leave `image-size` (high, via pptxgenjs) and `uuid` (moderate, via exceljs) as they are, documented in docs/11-SECURITY.md section 6.
+**Over:** `npm audit fix --force`.
+**Because:** neither is reachable with user input (pptxgenjs only measures chart PNGs this system renders; exceljs never passes a caller buffer to uuid), and the only offered fix downgrades both libraries to older breaking versions, which CLAUDE.md rules out.
+**Cost:** Recheck when either package ships a patched release.
+
 ---
 
 <!-- Append new decisions below as you make them. -->
