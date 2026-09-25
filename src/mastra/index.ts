@@ -30,28 +30,44 @@ function resolveDatabaseUrl(raw: string): string {
 // One LibSQL file holds memory, vectors and the evidence ledger, per docs/06-RESEARCH-STACK.md.
 const DATABASE_URL = resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db');
 
-export const mastra = new Mastra({
-  bundler: {
-    externals: ['@duckdb/node-bindings'],
-  },
-  agents: { orchestrator, dataAnalyst, documentAgent, researchAgent },
-  storage: new MastraCompositeStore({
-    id: 'composite-storage',
-    default: new LibSQLStore({
-      id: 'mastra-storage',
-      url: DATABASE_URL,
-    }),
-    domains: {
-      observability: await new DuckDBStore().getStore('observability'),
+// Next.js dev (Turbopack Fast Refresh) re-evaluates this module, and everything
+// that imports it, on every save anywhere in its dependency graph (agents,
+// tools, models.ts). Without caching, each re-evaluation opened a brand new
+// DuckDB connection through the top-level `await` below and never closed the
+// previous one; DuckDB allows only one open handle per file, so the leaked
+// connection then blocked the new one with "File is already open in
+// [this same process]" on the very next request. Caching the instance on
+// globalThis (the standard fix for singletons under Fast Refresh, same
+// rationale as the idempotency guard in ./models.ts) makes a reload reuse the
+// already-open connection instead of leaking another one. `mastra dev`,
+// `mastra build`/`start` and tests each run as a single process with no
+// reload, so this is a no-op there.
+const g = globalThis as typeof globalThis & { __mastraInstance?: Mastra };
+
+export const mastra: Mastra =
+  g.__mastraInstance ??
+  (g.__mastraInstance = new Mastra({
+    bundler: {
+      externals: ['@duckdb/node-bindings'],
     },
-  }),
-  observability: new Observability({
-    configs: {
-      default: {
-        serviceName: 'mastra',
-        exporters: [new MastraStorageExporter(), new MastraPlatformExporter()],
-        spanOutputProcessors: [new SensitiveDataFilter()],
+    agents: { orchestrator, dataAnalyst, documentAgent, researchAgent },
+    storage: new MastraCompositeStore({
+      id: 'composite-storage',
+      default: new LibSQLStore({
+        id: 'mastra-storage',
+        url: DATABASE_URL,
+      }),
+      domains: {
+        observability: await new DuckDBStore().getStore('observability'),
       },
-    },
-  }),
-});
+    }),
+    observability: new Observability({
+      configs: {
+        default: {
+          serviceName: 'mastra',
+          exporters: [new MastraStorageExporter(), new MastraPlatformExporter()],
+          spanOutputProcessors: [new SensitiveDataFilter()],
+        },
+      },
+    }),
+  }));
