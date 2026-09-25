@@ -9,6 +9,7 @@ import { ArtifactPlanKindSchema, type ArtifactPlanKind } from '@/modules/artifac
 import { detectConflicts, openLedger, type Conflict, type EvidenceLedger } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
 import { MODELS } from '../models';
+import { resolveSessionId } from '../runtime';
 import { openManifestStore, type ManifestStore } from '../session/manifestStore';
 import { artifactWorkflow } from '../workflows/artifact';
 import { buildTask, delegate, EvidenceSchema, SpecialistResultSchema } from './contracts';
@@ -47,12 +48,6 @@ function resolveDatabaseUrl(raw: string): string {
   const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath);
   return isAbsolute ? raw : `file:${resolve(PROJECT_ROOT, filePath)}`;
 }
-
-// A single shared session id, the same D-15 stand-in pattern src/mastra/tools/analysis.ts
-// and documents.ts already use for their own shared runtimes: a real per-conversation
-// session id is Phase 7's job (the chat UI hands the orchestrator a thread id), not
-// this phase's. Until then every call in one process reads and writes one manifest.
-const DEFAULT_SESSION_ID = 'orchestrator-default-session';
 
 let storePromise: Promise<ManifestStore> | null = null;
 
@@ -227,7 +222,17 @@ export type ActionDecision =
 const CAPABILITIES_LINE =
   'answer questions from your data, your documents, and public web research, suggest recommendations grounded in what has already been found, and (soon) generate artifacts like decks and spreadsheets';
 
-function unsupportedMessage(): string {
+// Matches docs/08-DEMO-SCENARIOS.md Scenario C's "email this to my manager" case:
+// when the request reads as "send/email/mail" something and an artifact already
+// exists this session, the specific, useful answer is the file itself, not the
+// generic capabilities list.
+const SEND_REQUEST_PATTERN = /\b(email|send|mail)\b/i;
+
+function unsupportedMessage(message: string, manifest: SessionManifest): string {
+  if (SEND_REQUEST_PATTERN.test(message) && manifest.artifacts.length > 0) {
+    const artifact = manifest.artifacts[manifest.artifacts.length - 1]!;
+    return `I cannot do that. What I can do is give you the file: "${artifact.title}" (${artifact.downloadUrl}).`;
+  }
   return `I cannot do that here. What I can do is ${CAPABILITIES_LINE}.`;
 }
 
@@ -249,9 +254,9 @@ function specialistsForMixed(sourceIds: string[], manifest: SessionManifest): Sp
  * Pure and synchronous on purpose, so the routing policy is testable with plain
  * objects: no model call, no manifest store, no specialist agent involved.
  */
-export function decideAction(intent: Intent, sourceIds: string[], manifest: SessionManifest): ActionDecision {
+export function decideAction(intent: Intent, sourceIds: string[], manifest: SessionManifest, message = ''): ActionDecision {
   if (intent === 'unsupported') {
-    return { kind: 'unsupported', message: unsupportedMessage() };
+    return { kind: 'unsupported', message: unsupportedMessage(message, manifest) };
   }
 
   if (intent === 'recommendation') {
@@ -639,7 +644,7 @@ export async function runTurn(message: string, sourceIds: string[], manifest: Se
   const now = deps.now ?? defaultNow;
 
   const intent = await classify(message, manifest);
-  const decision = decideAction(intent, sourceIds, manifest);
+  const decision = decideAction(intent, sourceIds, manifest, message);
 
   if (decision.kind === 'answer_directly') {
     return { intent, action: 'answer_directly', outcomes: [] };
@@ -884,10 +889,11 @@ export const handleRequestTool = createTool({
       conflicts: z.array(conflictSchema).optional(),
     }),
   ),
-  execute: async (inputData: { objective: string; sourceIds?: string[] }) =>
+  execute: (inputData: { objective: string; sourceIds?: string[] }, context?: { agent?: { threadId?: string } }) =>
     safe(async () => {
+      const sessionId = resolveSessionId(context);
       const store = await getManifestStore();
-      const manifest = await store.loadManifest(DEFAULT_SESSION_ID);
+      const manifest = await store.loadManifest(sessionId);
       const sourceIds = inputData.sourceIds ?? [];
 
       const turn = await runTurn(inputData.objective, sourceIds, manifest);
@@ -903,7 +909,7 @@ export const handleRequestTool = createTool({
         }
       }
       if (nextManifest !== manifest) {
-        await store.saveManifest(DEFAULT_SESSION_ID, nextManifest);
+        await store.saveManifest(sessionId, nextManifest);
       }
 
       return { ok: true as const, data: turn };
@@ -926,19 +932,20 @@ export const readSessionManifestTool = createTool({
       openGapCount: z.number(),
     }),
   ),
-  execute: safe(async () => {
-    const store = await getManifestStore();
-    const manifest = await store.loadManifest(DEFAULT_SESSION_ID);
-    return {
-      ok: true as const,
-      data: {
-        rendered: renderManifest(manifest),
-        sourceCount: manifest.sources.length,
-        findingCount: manifest.findings.length,
-        openGapCount: manifest.openGaps.length,
-      },
-    };
-  }),
+  execute: (_inputData: unknown, context?: { agent?: { threadId?: string } }) =>
+    safe(async () => {
+      const store = await getManifestStore();
+      const manifest = await store.loadManifest(resolveSessionId(context));
+      return {
+        ok: true as const,
+        data: {
+          rendered: renderManifest(manifest),
+          sourceCount: manifest.sources.length,
+          findingCount: manifest.findings.length,
+          openGapCount: manifest.openGaps.length,
+        },
+      };
+    })(),
 });
 
 const referenceResolutionSchema = z.union([
@@ -959,10 +966,10 @@ export const resolveReferenceTool = createTool({
     'report that nothing matches rather than assuming.',
   inputSchema: z.object({ phrase: z.string() }),
   outputSchema: toolResultSchema(referenceResolutionSchema),
-  execute: async (inputData: { phrase: string }) =>
+  execute: (inputData: { phrase: string }, context?: { agent?: { threadId?: string } }) =>
     safe(async () => {
       const store = await getManifestStore();
-      const manifest = await store.loadManifest(DEFAULT_SESSION_ID);
+      const manifest = await store.loadManifest(resolveSessionId(context));
       return { ok: true as const, data: resolveReference(inputData.phrase, manifest) };
     })(),
 });
@@ -1054,14 +1061,18 @@ export const requestArtifactTool = createTool({
       progressEvents: z.array(progressEventSchema),
     }),
   ),
-  execute: async (inputData: {
-    objective: string;
-    findingIds?: string[];
-    artifacts: { kind: ArtifactPlanKind; format?: ArtifactKind; title: string; revisionOf?: string }[];
-  }) =>
+  execute: (
+    inputData: {
+      objective: string;
+      findingIds?: string[];
+      artifacts: { kind: ArtifactPlanKind; format?: ArtifactKind; title: string; revisionOf?: string }[];
+    },
+    context?: { agent?: { threadId?: string } },
+  ) =>
     safe(async () => {
+      const sessionId = resolveSessionId(context);
       const store = await getManifestStore();
-      const manifest = await store.loadManifest(DEFAULT_SESSION_ID);
+      const manifest = await store.loadManifest(sessionId);
       const findingIds = inputData.findingIds ?? manifest.findings.map((f) => f.id);
 
       const progressEvents: ProgressEvent[] = [];
@@ -1132,7 +1143,7 @@ export const requestArtifactTool = createTool({
         nextManifest = addArtifact(nextManifest, artifact);
       }
       if (nextManifest !== manifest) {
-        await store.saveManifest(DEFAULT_SESSION_ID, nextManifest);
+        await store.saveManifest(sessionId, nextManifest);
       }
 
       return { ok: true as const, data: { results, progressEvents } };

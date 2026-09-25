@@ -4,11 +4,15 @@
   "description": "AI Business Operations Assistant: upload documents or a company website, then chat, analyze, research, and generate business deliverables.",
   "main": "index.js",
   "private": true,
+  "workspaces": [
+    "app"
+  ],
   "scripts": {
     "dev": "mastra dev",
     "build": "mastra build",
     "start": "mastra start",
-    "test": "vitest run",
+    "test": "vitest run --exclude tests/grounding/**",
+    "eval": "node --env-file=.env node_modules/vitest/vitest.mjs run tests/grounding --no-file-parallelism",
     "samples": "tsx scripts/make-samples.ts"
   },
   "keywords": [],

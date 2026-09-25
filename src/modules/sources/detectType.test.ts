@@ -40,6 +40,19 @@ describe('detectType', () => {
     expect(result).toEqual({ ok: true, data: 'json' });
   });
 
+  // docs/08-DEMO-SCENARIOS.md Scenario C / docs/PROMPTBOOK.md P7.4: a real,
+  // checked-in .xls fixture (not the ephemeral one built below), so the
+  // "upload a .xls" breakage-pass case is provable against an on-disk file
+  // like the one a reviewer would actually pick from their filesystem.
+  it('rejects the checked-in legacy.xls fixture, naming .xlsx as the fix', async () => {
+    const result = await detectType(join(FIXTURES, 'legacy.xls'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('UNSUPPORTED_FORMAT');
+    expect(result.error.message.toLowerCase()).toContain('legacy');
+    expect(result.error.suggestion?.toLowerCase()).toContain('.xlsx');
+  });
+
   it('rejects a missing file with PARSE_FAILED, not a crash', async () => {
     const result = await detectType(join(FIXTURES, 'does-not-exist.xlsx'));
     expect(result.ok).toBe(false);

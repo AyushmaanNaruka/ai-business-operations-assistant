@@ -94,13 +94,13 @@ nothing.
 
 ## Saturday 27 September: reliability and interface
 
-- [ ] Next.js chat UI with assistant-ui, file upload, download links
-- [ ] Per source status visible in the UI
-- [ ] Progress streaming visible in the UI
-- [ ] Long running work as workflow runs with IDs, `maxDuration` raised
-- [ ] Streamed upload to disk with size cap
-- [ ] The four grounding evals in `tests/grounding/`
-- [ ] **Deliberate breakage pass:** corrupt file, network cut mid research, unsupported request, scanned PDF, question mid ingest, two sources that disagree. Each must produce a clear honest message
+- [x] Next.js chat UI with assistant-ui, file upload, download links
+- [x] Per source status visible in the UI
+- [x] Progress streaming visible in the UI (the orchestrator's own stated plan/progress narration, P5.6, streams through the same chat turn; tool calls render via ToolFallback)
+- [x] Long running work as workflow runs with IDs, `maxDuration` raised (60s on `/api/chat`; artifact generation already ran as a workflow run since P6.6)
+- [x] Streamed upload to disk with size cap
+- [x] The four grounding evals in `tests/grounding/` (built, `npm run eval`; re-run once the Gemini free tier's daily quota resets — exhausted today by this session's own testing, see docs/DECISIONS.md)
+- [x] **Deliberate breakage pass:** corrupt file, unsupported request, scanned PDF, question mid ingest, two sources that disagree — all verified through the real `/api/upload` and module layer, each producing a clear honest message. Network-cut-mid-research is structural (M4's SEARCH_QUOTA/fallback path, unit tested) but not manually exercised by physically disconnecting
 
 **Demonstrable:** the system behaving well when things go wrong, which is the part that separates submissions.
 

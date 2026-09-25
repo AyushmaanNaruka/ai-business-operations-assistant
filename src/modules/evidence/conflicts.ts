@@ -53,10 +53,23 @@ export function detectConflicts(evidence: Evidence[]): Conflict[] {
       for (let j = i + 1; j < group.length; j++) {
         const a = group[i]!;
         const b = group[j]!;
-        if (typeof a.value !== 'number' || typeof b.value !== 'number') continue;
 
-        const isConflict = CONFLICTS[a.metric!.unit](a.value, b.value);
-        if (isConflict) conflicts.push({ metric: a.metric!, a, b });
+        if (typeof a.value === 'number' && typeof b.value === 'number') {
+          if (CONFLICTS[a.metric!.unit](a.value, b.value)) conflicts.push({ metric: a.metric!, a, b });
+          continue;
+        }
+
+        // A document quoting a qualitative claim (channel notes, a stated ranking)
+        // against a computed number under the SAME metric key is exactly the
+        // "the notes say strongest, the numbers disagree" case (P5.6, Scenario
+        // Paid Social): there is no tolerance to apply to a claim with no number
+        // in it, but the pairing itself is the thing rule 10 needs to see, so it
+        // is surfaced as a Conflict rather than silently skipped like an
+        // unrelated prose claim (which never shares a metric key at all).
+        const oneNumericOneQualitative =
+          (typeof a.value === 'number' && typeof b.value === 'string' && b.value.length > 0) ||
+          (typeof b.value === 'number' && typeof a.value === 'string' && a.value.length > 0);
+        if (oneNumericOneQualitative) conflicts.push({ metric: a.metric!, a, b });
       }
     }
   }

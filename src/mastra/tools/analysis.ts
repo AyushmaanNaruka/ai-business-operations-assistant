@@ -1,24 +1,9 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import type { ToolResult } from '@/types';
-import {
-  computeStats,
-  createSession,
-  describe as describeTable,
-  query,
-  type DuckDBSession,
-  type StatsOp,
-} from '@/modules/analysis';
-import { openLedger, type EvidenceLedger } from '@/modules/evidence';
+import { computeStats, describe as describeTable, query, type StatsOp } from '@/modules/analysis';
 import { fail } from '@/modules/reliability';
-import { createSourceRegistry, ingest, type SourceRegistry } from '@/modules/sources';
-
-// mastra dev runs with its cwd set to src/mastra/public, not the project root
-// (see docs/DECISIONS.md D-09); INIT_CWD is npm's original invocation
-// directory and the one thing that reliably points back at the project root.
-const PROJECT_ROOT = process.env.INIT_CWD || process.cwd();
+import { getRuntime } from '../runtime';
 
 const toolResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
   z.discriminatedUnion('ok', [
@@ -50,60 +35,6 @@ function safe<T>(fn: () => Promise<ToolResult<T>>): () => Promise<ToolResult<T>>
       return fail('PARSE_FAILED', `Unexpected error: ${(err as Error).message}`, { recoverable: false });
     }
   };
-}
-
-/**
- * One shared DuckDB session and evidence ledger for the whole process.
- *
- * This is a deliberate Phase 2 stand-in, not the real design: M8 (session
- * manifest, Phase 5) will scope a session per conversation, and the chat
- * UI's upload flow (Phase 7) will call `ingest()` per file a user actually
- * uploads. Until then, this loads samples/campaigns.xlsx once on first tool
- * call so the Data Analyst has something to query in Mastra Studio.
- * docs/DECISIONS.md D-15.
- */
-let sessionPromise: Promise<{ session: DuckDBSession; registry: SourceRegistry; ledger: EvidenceLedger }> | null = null;
-
-async function getRuntime() {
-  if (!sessionPromise) {
-    sessionPromise = (async () => {
-      const session = await createSession('phase2-shared-session');
-      const registry = createSourceRegistry();
-      const ledger = await openLedger(resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db'));
-
-      const samplePath = resolve(PROJECT_ROOT, 'samples/campaigns.xlsx');
-      if (existsSync(samplePath)) {
-        const source = ingest(session, registry, { path: samplePath });
-        await waitForReady(registry, source.id);
-      }
-
-      return { session, registry, ledger };
-    })().catch((err: unknown) => {
-      // Do not cache a rejected promise: a single transient init failure
-      // (a locked db file, a bad sample row) would otherwise permanently
-      // break every tool call for the rest of the process. Let the next
-      // call retry from scratch.
-      sessionPromise = null;
-      throw err;
-    });
-  }
-  return sessionPromise;
-}
-
-function resolveDatabaseUrl(raw: string): string {
-  if (!raw.startsWith('file:')) return raw;
-  const filePath = raw.slice('file:'.length);
-  const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath);
-  return isAbsolute ? raw : `file:${resolve(PROJECT_ROOT, filePath)}`;
-}
-
-async function waitForReady(registry: SourceRegistry, id: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const source = registry.getSource(id);
-    if (source && source.status !== 'pending') return;
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 
 export const listDatasetsTool = createTool({

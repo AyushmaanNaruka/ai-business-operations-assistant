@@ -1,9 +1,16 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { ToolResult } from '@/types';
 import { fail, ok } from '@/modules/reliability';
 
-const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR || 'data/documents';
+// A bare relative path resolves against whatever `process.cwd()` happens to be
+// at call time, which is the project root under `mastra dev`/vitest/tsx but is
+// `app/` once this module runs inside the Next.js process (docs/DECISIONS.md
+// D-09's exact failure mode, in a module that had not needed the fix before
+// Phase 7). `INIT_CWD` is npm's original invocation directory; the Next app's
+// own next.config.ts sets it explicitly for exactly this reason.
+const PROJECT_ROOT = process.env.INIT_CWD || process.cwd();
+const DOCUMENTS_DIR = resolve(PROJECT_ROOT, process.env.DOCUMENTS_DIR || 'data/documents');
 
 /** Persists a source's converted markdown (with its citation markers) to disk, keyed by source id. */
 export async function saveMarkdown(sourceId: string, markdown: string): Promise<string> {

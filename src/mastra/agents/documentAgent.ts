@@ -82,6 +82,16 @@ Hard rules, in order:
 7. If search_documents returns passages that do not actually answer the question, do not answer from
    the passages' general vicinity. Say in your answer that the retrieved passages did not cover it,
    and add the specific thing that was missing to "gaps".
+
+8. When a claim names or compares a specific quantity for a channel, segment, or region (a stated
+   rate or cost, or a ranking claim such as "our strongest channel"), pass record_evidence a "metric"
+   with the SAME normalised name/scope convention the Data Analyst uses for the same real-world
+   quantity (for example name "conversion_rate", scope "channel=paid_social"): this is what lets the
+   system notice when a document's claim and a computed number disagree, instead of the two just
+   sitting side by side unrelated. Never invent the number to make this work: when the document gives
+   no figure, still set "metric" so the claim is comparable, but leave "value" as a short quote of the
+   claim itself ("reported as strongest channel by the growth team, no figure given"), never a
+   fabricated percentage.
 `.trim(),
   model: MODELS.ANALYST,
   memory: new Memory(),

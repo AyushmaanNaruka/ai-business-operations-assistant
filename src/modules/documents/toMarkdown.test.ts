@@ -4,6 +4,7 @@ import { toMarkdown } from './toMarkdown';
 import { formatPageMarker, formatSourceMarker } from './marker';
 
 const SAMPLES = join(import.meta.dirname, '..', '..', '..', 'samples');
+const FIXTURES = join(import.meta.dirname, '..', 'sources', '__fixtures__');
 
 describe('toMarkdown (pdf)', () => {
   it('places page markers at the correct boundaries and cites the right page for a known sentence', async () => {
@@ -73,6 +74,31 @@ describe('toMarkdown (pdf)', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('PARSE_FAILED');
+  });
+
+  // docs/08-DEMO-SCENARIOS.md Scenario C / docs/PROMPTBOOK.md P7.4: real,
+  // checked-in fixtures rather than a mocked unpdf, so "upload a password
+  // protected PDF" and "upload a scanned PDF" are provable against actual
+  // files a reviewer could pick up and re-upload themselves.
+  it('reports ENCRYPTED with a plain English message for a real password-protected PDF fixture', async () => {
+    const result = await toMarkdown(join(FIXTURES, 'encrypted.pdf'), 'pdf');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('ENCRYPTED');
+    expect(result.error.recoverable).toBe(false);
+    expect(result.error.message).toContain('password protected');
+    expect(result.error.message).not.toMatch(/PasswordException|at\s+\S+\.js:\d+/); // no raw exception text or stack frame
+    expect(result.error.suggestion?.toLowerCase()).toContain('password');
+  });
+
+  it('reports SCANNED_PDF for a real PDF fixture with genuinely blank pages (no text layer)', async () => {
+    const result = await toMarkdown(join(FIXTURES, 'scanned.pdf'), 'pdf');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('SCANNED_PDF');
+    expect(result.error.recoverable).toBe(false);
+    expect(result.error.message).toContain('no extractable text');
+    expect(result.error.suggestion).toBeTruthy();
   });
 });
 

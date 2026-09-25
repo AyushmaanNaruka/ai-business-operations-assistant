@@ -56,6 +56,34 @@ describe('detectConflicts', () => {
     expect(detectConflicts([a, b])).toHaveLength(0);
   });
 
+  it('fires on a qualitative claim against a computed number under the same metric key', () => {
+    const computed = makeEvidence({
+      kind: 'computed',
+      value: 0.018,
+      sourceName: 'campaigns.xlsx',
+      metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' },
+    });
+    const claimed = makeEvidence({
+      kind: 'document',
+      claim: 'Growth team says Paid Social is the strongest channel this year',
+      value: 'reported as strongest channel by the growth team, no figure given',
+      sourceName: 'customer-notes.docx',
+      metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' },
+    });
+
+    const conflicts = detectConflicts([computed, claimed]);
+
+    expect(conflicts).toHaveLength(1);
+    expect([conflicts[0]!.a.id, conflicts[0]!.b.id].sort()).toEqual([computed.id, claimed.id].sort());
+  });
+
+  it('stays silent when a qualitative value is an empty string', () => {
+    const computed = makeEvidence({ value: 0.018, metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
+    const empty = makeEvidence({ value: '', metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
+
+    expect(detectConflicts([computed, empty])).toHaveLength(0);
+  });
+
   it('applies a relative tolerance for currency', () => {
     const agree = makeEvidence({ value: 10000, metric: { name: 'revenue', scope: 'channel=email', unit: 'currency' } });
     const stillAgree = makeEvidence({ value: 10300, metric: { name: 'revenue', scope: 'channel=email', unit: 'currency' } });

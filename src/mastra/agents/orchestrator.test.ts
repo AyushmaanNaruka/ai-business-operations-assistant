@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '@mastra/core/agent';
-import type { Evidence, Finding, MetricKey, SessionManifest, SpecialistTask, Source } from '@/types';
-import { emptyManifest, addSource, addFinding } from '@/modules/session';
+import type { Artifact, Evidence, Finding, MetricKey, SessionManifest, SpecialistTask, Source } from '@/types';
+import { emptyManifest, addSource, addFinding, addArtifact } from '@/modules/session';
 import {
   buildPlan,
   checkSourcesReady,
@@ -176,6 +176,31 @@ describe('runTurn: an unsupported request', () => {
     expect(turn.message).toBeTruthy();
     expect(turn.message!.toLowerCase()).toContain('cannot');
     expect(turn.message!.toLowerCase()).toContain('what i can do');
+    expect(delegateFn).not.toHaveBeenCalled();
+  });
+
+  it('offers the file instead of the generic capabilities list when a send request follows an already-built artifact', async () => {
+    const delegateFn = vi.fn();
+    const classify = vi.fn(async () => 'unsupported' as Intent);
+    const artifact: Artifact = {
+      id: 'art_1',
+      version: 1,
+      kind: 'pptx',
+      skillUsed: 'client-presentation',
+      title: 'Q3 Campaign Review',
+      path: '/generated/art_1.pptx',
+      downloadUrl: '/downloads/art_1.pptx',
+      findingIds: [],
+      evidenceIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    const manifest = addArtifact(emptyManifest(), artifact);
+
+    const turn = await runTurn('Can you email this to my manager?', [], manifest, { classify, delegateFn });
+
+    expect(turn.action).toBe('unsupported');
+    expect(turn.message).toContain(artifact.downloadUrl);
+    expect(turn.message).toContain(artifact.title);
     expect(delegateFn).not.toHaveBeenCalled();
   });
 });

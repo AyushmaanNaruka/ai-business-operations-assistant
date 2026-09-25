@@ -132,6 +132,37 @@ describe('renderManifest', () => {
     expect(text).toContain('failed: Password protected');
   });
 
+  // docs/PROMPTBOOK.md P7.4 "the breakage pass": ingest.ts never rewrites a
+  // failed source's `summary`, which is still whatever placeholder it wrote
+  // the instant upload started ("detecting type...", "reading..."), since
+  // that placeholder was written before buildSourceCard ever ran (a failed
+  // source never gets a real doc/table shape to build one from). Rendering
+  // that stale summary right next to "[failed: ...]" would read as broken
+  // ("still detecting" and "failed" at once) to a non technical user.
+  it('ignores a failed source\'s stale "detecting type..." placeholder summary rather than rendering it alongside "[failed: ...]"', () => {
+    const manifest: SessionManifest = {
+      sources: [
+        {
+          id: 'src_1',
+          name: 'legacy.xls',
+          kind: 'txt', // the placeholder kind ingest() assigns before detectType resolves
+          origin: 'upload',
+          status: 'failed',
+          summary: 'src_1  legacy.xls  detecting type...',
+          addedAt: new Date().toISOString(),
+          error: { code: 'UNSUPPORTED_FORMAT', message: 'This is a legacy binary Office file (.xls), which this system does not read.' },
+        },
+      ],
+      findings: [],
+      artifacts: [],
+      openGaps: [],
+    };
+
+    const text = renderManifest(manifest);
+    expect(text).toContain('src_1  legacy.xls  [failed: This is a legacy binary Office file (.xls), which this system does not read.]');
+    expect(text).not.toContain('detecting type');
+  });
+
   it('renders empty sections as "(none)" rather than omitting the heading', () => {
     const text = renderManifest({ sources: [], findings: [], artifacts: [], openGaps: [] });
     expect(text).toContain('SOURCES\n  (none)');

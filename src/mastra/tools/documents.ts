@@ -1,18 +1,9 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import type { ToolResult } from '@/types';
-import { createSession, type DuckDBSession } from '@/modules/analysis';
 import { getDocument, search } from '@/modules/documents';
-import { openLedger, type EvidenceLedger } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
-import { createSourceRegistry, ingest, type SourceRegistry } from '@/modules/sources';
-
-// mastra dev runs with its cwd set to src/mastra/public, not the project root
-// (see docs/DECISIONS.md D-09); INIT_CWD is npm's original invocation
-// directory and the one thing that reliably points back at the project root.
-const PROJECT_ROOT = process.env.INIT_CWD || process.cwd();
+import { getRuntime } from '../runtime';
 
 const toolResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
   z.discriminatedUnion('ok', [
@@ -44,68 +35,6 @@ function safe<T>(fn: () => Promise<ToolResult<T>>): () => Promise<ToolResult<T>>
       return fail('PARSE_FAILED', `Unexpected error: ${(err as Error).message}`, { recoverable: false });
     }
   };
-}
-
-/**
- * One shared DuckDB session and source registry for the whole process,
- * scoped to the Document agent's tools only.
- *
- * This is a second, independent copy of the same D-15 stand-in pattern used
- * in src/mastra/tools/analysis.ts, not a bug: the Data Analyst and the
- * Document agent each get their own registry/session here rather than
- * sharing one, because there is no session manifest yet for two tool files
- * to share against. Wiring one registry that every agent reads is explicitly
- * Phase 5's job (M8, docs/03-ARCHITECTURE.md), not this file's. Until then,
- * this loads samples/northwind-brief.pdf and samples/customer-notes.docx
- * once on first tool call so the Document agent has something real to
- * answer questions about in Mastra Studio.
- */
-let sessionPromise: Promise<{ session: DuckDBSession; registry: SourceRegistry; ledger: EvidenceLedger }> | null = null;
-
-function resolveDatabaseUrl(raw: string): string {
-  if (!raw.startsWith('file:')) return raw;
-  const filePath = raw.slice('file:'.length);
-  const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath);
-  return isAbsolute ? raw : `file:${resolve(PROJECT_ROOT, filePath)}`;
-}
-
-async function getRuntime() {
-  if (!sessionPromise) {
-    sessionPromise = (async () => {
-      const session = await createSession('phase3-document-shared-session');
-      const registry = createSourceRegistry();
-      // Same evidence ledger file src/mastra/tools/analysis.ts opens: one ledger
-      // per process (D-15 stand-in), so a P5.2 evidence id is unique and
-      // resolvable regardless of which specialist recorded it.
-      const ledger = await openLedger(resolveDatabaseUrl(process.env.DATABASE_URL || 'file:./data/app.db'));
-
-      const samplePaths = [resolve(PROJECT_ROOT, 'samples/northwind-brief.pdf'), resolve(PROJECT_ROOT, 'samples/customer-notes.docx')];
-      for (const samplePath of samplePaths) {
-        if (!existsSync(samplePath)) continue;
-        const source = ingest(session, registry, { path: samplePath });
-        await waitForReady(registry, source.id);
-      }
-
-      return { session, registry, ledger };
-    })().catch((err: unknown) => {
-      // Do not cache a rejected promise: a single transient init failure
-      // (a locked db file, a bad sample file) would otherwise permanently
-      // break every tool call for the rest of the process. Let the next
-      // call retry from scratch. Same fix as analysis.ts's getRuntime().
-      sessionPromise = null;
-      throw err;
-    });
-  }
-  return sessionPromise;
-}
-
-async function waitForReady(registry: SourceRegistry, id: string, timeoutMs = 30000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const source = registry.getSource(id);
-    if (source && source.status !== 'pending') return;
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 
 export const listDocumentsTool = createTool({
@@ -277,13 +206,26 @@ export const recordEvidenceTool = createTool({
     'reranked chunk, confidence "medium"), false when quoted from get_document (full context, confidence ' +
     '"high"); this tool assigns confidence by that rule, it is never passed in. Call this for every claim that ' +
     'will appear in your answer, then use the returned evidence object as-is in your structured output; do not ' +
-    'retype or paraphrase it.',
+    'retype or paraphrase it. Set "metric" whenever the claim names or compares a specific quantity for a ' +
+    'channel/segment/region (a stated rate or cost, or a ranking claim like "our strongest channel"), using the ' +
+    'SAME normalised name/scope convention the Data Analyst uses (e.g. name "conversion_rate", scope ' +
+    '"channel=paid_social") — this is what lets conflict detection (rule 10) match a document claim against a ' +
+    'computed number for the same thing. Never invent a number the document does not state: when the claim is ' +
+    'qualitative, leave "value" as a short quote of the claim itself, not a fabricated figure.',
   inputSchema: z.object({
     claim: z.string().describe('Human readable statement of the fact, e.g. "Acme targets mid-market SaaS teams in North America"'),
     sourceId: z.string().describe('The source id this claim came from, from list_documents.'),
     sourceName: z.string().describe('The document name, e.g. "northwind-brief.pdf".'),
     locator: z.string().describe('Where in the document, e.g. "page 2, Positioning".'),
-    value: z.union([z.number(), z.string()]).optional().describe('A quoted number or short value, if the claim is one.'),
+    value: z.union([z.number(), z.string()]).optional().describe('A quoted number, or a short quote of the claim when it names no figure.'),
+    metric: z
+      .object({
+        name: z.string(),
+        scope: z.string(),
+        unit: z.enum(['ratio', 'currency', 'count', 'duration']),
+      })
+      .optional()
+      .describe('Set this when the claim names or compares a metric also computable from the data, so conflict detection can find it.'),
     retrieved: z
       .boolean()
       .describe('true if this claim came from search_documents (indexed mode), false if from get_document (full mode).'),
@@ -295,6 +237,7 @@ export const recordEvidenceTool = createTool({
     sourceName: string;
     locator: string;
     value?: number | string;
+    metric?: { name: string; scope: string; unit: 'ratio' | 'currency' | 'count' | 'duration' };
     retrieved: boolean;
   }) =>
     safe(async () => {
@@ -306,6 +249,7 @@ export const recordEvidenceTool = createTool({
         sourceName: inputData.sourceName,
         locator: inputData.locator,
         ...(inputData.value !== undefined ? { value: inputData.value } : {}),
+        ...(inputData.metric ? { metric: inputData.metric } : {}),
         retrieved: inputData.retrieved,
       });
       return { ok: true as const, data: { evidence } };

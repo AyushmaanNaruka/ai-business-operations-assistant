@@ -28,10 +28,17 @@ function renderSection<T>(heading: string, items: T[], renderItem: (item: T) => 
 }
 
 function renderSource(source: Source): string {
-  const base = source.summary.length > 0 ? source.summary : `${source.id}  ${source.name}`;
+  const failed = source.status === 'failed' && source.error;
+  // A failed source's `summary` is still whatever placeholder ingest() wrote
+  // before parsing even started ("detecting type...", "reading..."):
+  // ingest.ts never rewrites it on failure, since buildSourceCard needs a
+  // parsed doc/table shape a failed source never gets. Showing that stale
+  // "still working" phrase right next to "[failed: ...]" reads as broken to
+  // a non technical user, so a failed source ignores `summary` entirely and
+  // renders from just its id and name instead.
+  const base = failed ? `${source.id}  ${source.name}` : source.summary.length > 0 ? source.summary : `${source.id}  ${source.name}`;
   const lines = base.split('\n');
-  const statusText =
-    source.status === 'failed' && source.error ? `failed: ${source.error.message}` : source.status;
+  const statusText = failed ? `failed: ${source.error!.message}` : source.status;
   lines[0] = `${lines[0]}  [${statusText}]`;
   return lines.map((line) => `  ${line}`).join('\n');
 }

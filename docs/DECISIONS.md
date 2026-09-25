@@ -302,6 +302,48 @@ Date, one line of context
 **Because:** AGENTS.md's own "things that will look wrong but are correct" list already states the orchestrator has no domain tools (rule: it cannot query DuckDB itself), and no code anywhere yet calls `addSource()`/exposes a queryable table against the orchestrator's own session manifest (the exact gap P5.7's own findings already named); building that wiring is Phase 7's chat-upload job, not P6.7's. Rule 6 (report gaps, never fill them) applies to this tool's own output the same way it applies to a specialist's.
 **Cost:** Every workbook artifact generated through this build has an empty Data sheet regardless of what the user actually asked for; acceptable for this phase, since the limitation is surfaced to the user every time rather than hidden, and the fix is isolated to one call site (`dataRows: []`) once Phase 7 makes rows reachable.
 
+## D-42 One shared DuckDB session/registry/ledger/manifest store, not one per tool file
+25 Sep 2026, P7.1/P7.2, `src/mastra/runtime.ts`.
+**Chose:** A single `getRuntime()` in a new `src/mastra/runtime.ts`, used by `tools/analysis.ts`, `tools/documents.ts`, and the new Next.js upload/manifest routes. It also mirrors every source into the session manifest (`ingestForSession`), and exposes `resolveSessionId(context)` reading `context.agent.threadId` so each browser conversation gets its own manifest.
+**Over:** Leaving `analysis.ts` and `documents.ts`'s independent D-15 stand-ins (two separate in-memory DuckDB sessions, two separate registries) as they were.
+**Because:** P5.7 and D-41 both named the same gap: nothing ever called `addSource()`, so `read_session_manifest` rendered an empty source list even with data loaded and queryable, and a file "uploaded" to one tool file's registry was invisible to the other's. This is the addSource() wiring Phase 7 owed; verified live (`/api/manifest` now shows real sources with real quality warnings after upload, previously impossible).
+**Cost:** Every specialist and the chat UI now share one DuckDB session process-wide (still a single-session stand-in, matching AGENTS.md's "no user accounts" out-of-scope line); true per-conversation data isolation is not built, only per-conversation manifest/evidence-ledger session ids are.
+
+## D-43 The Next.js app is its own npm project (`app/`), cross-imported via a path alias, not merged into the root package.json
+25 Sep 2026, P7.1, `app/package.json`, `app/tsconfig.json`, root `package.json`.
+**Chose:** `app/` keeps its own `package.json`/`tsconfig.json`/`node_modules` (from `assistant-ui create`'s minimal template), declared as an npm workspace of the root (`"workspaces": ["app"]`). Its tsconfig repoints `@/*` to `../src/*` (matching every `src/mastra`/`src/modules` file's own existing alias) and moves the scaffold's own components to `@ui/*` instead, rather than merging Next.js into the root `package.json` and expanding root `tsconfig.json`'s `include`.
+**Over:** One unified `package.json`/`tsconfig.json` at the repo root running both Mastra and Next.js.
+**Because:** the root project's `dev`/`build`/`start` scripts and `tsconfig.json` are load-bearing for every earlier phase's "Done when" (P0.1: `npm run dev` opens Mastra Studio); redefining them for Next would break that contract. A separate project keeps both halves' tooling (oxlint/tailwind vs mastra/vitest) from fighting over the same config files.
+**Cost:** A real, initially-surprising failure mode: npm auto-installs peer dependencies, so `app/node_modules` got its own `@mastra/core@1.71.0` alongside the root's `1.68.0` — two distinct classes with the same name, `handleChatStream`'s Mastra type check failed with "`#private` refers to a different member." Fixed with `workspaces` + `npm dedupe` (hoists both to one shared copy); worth knowing if it recurs after any future `npm install` inside `app/` alone.
+
+## D-44 Uploads stream as a raw request body, not multipart/form-data
+25 Sep 2026, P7.2, `app/app/api/upload/route.ts`.
+**Chose:** The client sends the file's raw bytes as the fetch `body` (`fetch('/api/upload?name=...', {method:'POST', body: file})`), with filename/threadId in the query string; the route pipes `Readable.fromWeb(req.body)` straight to `fs.createWriteStream` via `stream/promises.pipeline`, with a `Transform` enforcing `MAX_UPLOAD_MB` mid-stream as a backstop to the `Content-Length` precheck.
+**Over:** A multipart/form-data upload parsed with `busboy`/`formidable`.
+**Because:** P7.2 requires uploads to "stream to disk, never buffer into memory"; a raw body IS a single stream with no framing to parse, so it needs no new dependency at all (docs/06-RESEARCH-STACK.md has no multipart parser listed, and AGENTS.md requires appending a reason to add one). A `Content-Length` check before the stream starts, plus the same live check mid-stream, together give "a wrong file fails in a second" without ever holding the file in memory.
+**Cost:** Only ever one file per request (no multi-file form fields); the Sources panel just calls the endpoint once per dropped file instead, which is what it does.
+
+## D-45 `detectConflicts` also flags a qualitative claim against a computed number under the same metric key
+25 Sep 2026, P7.3 handback + follow-up, `src/modules/evidence/conflicts.ts`, `src/mastra/tools/documents.ts`, `src/mastra/agents/documentAgent.ts`.
+**Chose:** Two changes together. (1) `detectConflicts` now also surfaces a pair under the same metric name+scope where exactly one side is a number and the other is a non-empty string (previously: `typeof a.value !== 'number' || typeof b.value !== 'number'` skipped the pair entirely). (2) `documents.ts`'s `record_evidence` gained the `metric` field `analysis.ts`'s already had, and `documentAgent.ts` gained a rule telling it to set a metric key (matching the Data Analyst's own name/scope convention) whenever a document states or compares a specific, named quantity — recording the claim text as `value` when the document gives no figure, never a fabricated one.
+**Over:** Leaving qualitative claims permanently uncomparable, or instructing the Document Agent to invent a percentage so two numbers could be compared.
+**Because:** the P7.3 grounding-eval build found this live: `scripts/make-customer-notes.ts`'s own header comment says the planted "Paid Social is our strongest channel" note (no number in it) is supposed to exercise M5 conflict detection, and structurally it never could, on two independent counts (`documents.ts` had no way to attach a metric key at all, and even with one, the pre-existing numeric-only comparison would still skip it). Rule 1 (numbers are computed, never estimated) forbids fixing this by having the model invent a figure, so the fix is in the comparison itself: two claims about the same metric, one with a number and one without, disagreeing in *kind* is still something rule 10 needs to see, not something to skip like an unrelated prose claim (which never shares a metric key in the first place).
+**Cost:** None found against the existing 5 `conflicts.test.ts` cases (all still pass); two new tests cover the added case and its empty-string edge.
+
+## D-46 `unsupportedMessage` names the actual file when refusing a "email/send this" request against an existing artifact
+25 Sep 2026, P7.4 handback + follow-up, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `decideAction`'s 4th (optional, defaulted `''`) parameter is now the raw request text; when it matches `/\b(email|send|mail)\b/i` AND the manifest already holds a completed artifact, `unsupportedMessage` returns "I cannot do that. What I can do is give you the file: "<title>" (<downloadUrl>)." instead of the generic capabilities list.
+**Over:** Always returning the generic "I cannot do X, here is what I can do" message regardless of what "X" was.
+**Because:** docs/08-DEMO-SCENARIOS.md Scenario C's exact wording for this case is "I cannot do that. What I can do is give you the file" — a materially more useful answer than the generic capabilities line whenever there is, in fact, a file to hand over. Found and specified (not applied, to avoid a concurrent edit conflict) by the P7.4 breakage-pass subagent; applied here.
+**Cost:** None found; all 58 `orchestrator.test.ts` cases (including a new one for this path) pass, and the generic message is still the fallback for every other unsupported request and for a send-request with nothing built yet.
+
+## D-47 `src/modules/documents/store.ts` resolves its save path against `INIT_CWD`, not a bare relative string
+25 Sep 2026, P7.1 follow-up, `src/modules/documents/store.ts`.
+**Chose:** `DOCUMENTS_DIR` is now `resolve(process.env.INIT_CWD || process.cwd(), process.env.DOCUMENTS_DIR || 'data/documents')`, the same pattern every `src/mastra/*` file already uses (D-09), applied here in a `src/modules/*` file for the first time.
+**Over:** Leaving the bare `'data/documents'` relative string `saveMarkdown`/`getDocument` already used.
+**Because:** live-caught while smoke-testing uploads through the Next.js dev server: this module had never needed the D-09 fix before, since every prior caller (`mastra dev`, vitest, `tsx` scripts) happened to run with `cwd` already at the project root. Running inside the Next.js process (`cwd` = `app/`) silently wrote every document to `app/data/documents/` instead — a second, wrong copy of the store, invisible to `mastra dev`/Studio, and a real bug this exact phase's own new caller exposed.
+**Cost:** None; `getDocument`/`saveMarkdown`'s existing tests still pass, since they already ran with `cwd` at the project root.
+
 ---
 
 <!-- Append new decisions below as you make them. -->
