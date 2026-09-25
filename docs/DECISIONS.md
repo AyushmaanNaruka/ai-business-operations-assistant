@@ -424,3 +424,11 @@ Date, one line of context
 ---
 
 <!-- Append new decisions below as you make them. -->
+
+## D-59 The demo video is a separate Remotion project under docs/
+26 Sep 2026, `docs/demo-video/`, `docs/media/`.
+**Chose:** A self contained Remotion project in `docs/demo-video/` with its own `package.json`, rendering `docs/media/demo.mp4` plus a short GIF teaser the README can play inline. The chat UI is redrawn from the app's own tokens and layout, and every figure on screen is computed from `samples/campaigns.xlsx`.
+**Over:** A screen recording of the live app, or adding Remotion to the root or app `package.json`.
+**Because:** a recording depends on free tier models answering on cue (the rate limits in D-53 made that unreliable) and cannot zoom into the SQL or the formula bar cleanly. Keeping Remotion out of both existing manifests leaves the app's dependency set, which CLAUDE.md treats as deliberate, exactly as it was. It is tooling for the README, not part of the system.
+**Sound:** the soundtrack is synthesised by `docs/demo-video/scripts/make-soundtrack.ts`, with its effects timed from the same scene timeline as the animation, rather than a stock music track, which would carry a licence and never line up with the cuts.
+**Cost:** The video is a faithful redraw, not footage, so a UI change means re rendering it. Remotion needs a company licence for organisations over three people.

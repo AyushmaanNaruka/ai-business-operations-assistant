@@ -8,6 +8,14 @@ A conversational assistant for business teams. Upload files or point it at a com
 
 Built with TypeScript and Mastra.
 
+<p align="center">
+  <a href="docs/media/demo.mp4">
+    <img src="docs/media/demo-teaser.gif" alt="Demo: files are uploaded, a question is answered with visible SQL, a conflict between the notes and the data is surfaced, and an Excel workbook and client deck are generated" width="860">
+  </a>
+  <br>
+  <sub><b><a href="docs/media/demo.mp4">▶ Watch the full 80 second demo, with sound</a></b> · every number on screen is computed from the sample data</sub>
+</p>
+
 ## Quick start
 
 ```bash
@@ -81,7 +89,11 @@ The chat UI keeps every conversation in a left sidebar (reopen one to continue w
 
 ## Demo
 
-<!-- Link the recording. One line on the scenario. -->
+**[Watch the product video (MP4, 80 seconds, with sound)](docs/media/demo.mp4)**
+
+[![Demo video poster](docs/media/demo-poster.png)](docs/media/demo.mp4)
+
+It follows scenario A from `docs/08-DEMO-SCENARIOS.md`: four Northwind files are uploaded, a campaign question is answered with the SQL visible and the data problems flagged (duplicates, mixed date formats, missing revenue, a too small sample), the customer notes are caught contradicting the spreadsheet on Paid Social, and an Excel workbook and client deck are generated from the evidence. The video is built with Remotion from `docs/demo-video/` (D-59), its figures are computed from `samples/campaigns.xlsx`, and its soundtrack is synthesised in code, so it is free to share anywhere.
 
 ## What is deliberately out of scope
 

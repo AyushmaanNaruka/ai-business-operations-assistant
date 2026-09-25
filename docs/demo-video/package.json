@@ -1,0 +1,29 @@
+{
+  "name": "business-operations-assistant-demo-video",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Product demo video for the AI Business Operations Assistant, built with Remotion. Isolated from the app's dependencies.",
+  "scripts": {
+    "soundtrack": "node scripts/make-soundtrack.ts",
+    "studio": "npm run soundtrack && remotion studio src/index.ts",
+    "render": "npm run soundtrack && remotion render src/index.ts Demo ../media/demo.mp4 --codec=h264 --crf=20",
+    "render:teaser": "remotion render src/index.ts Teaser ../media/demo-teaser.gif --codec=gif --every-nth-frame=2 --scale=0.45",
+    "render:poster": "remotion still src/index.ts Demo ../media/demo-poster.png --frame=1156",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.529",
+    "@remotion/google-fonts": "4.0.529",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.529"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "typescript": "5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
