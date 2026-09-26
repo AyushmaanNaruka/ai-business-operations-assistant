@@ -2,6 +2,7 @@ import { handleChatStream } from "@mastra/ai-sdk";
 import { createUIMessageStreamResponse, type UIMessage, type UIMessageChunk } from "ai";
 import { mastra } from "@/mastra";
 import { CHAT_RESOURCE_ID, ensureConversation } from "@/mastra/conversations";
+import { ORCHESTRATOR_MAX_STEPS } from "@/mastra/models";
 import { firstUserText, messageText } from "@/modules/session";
 import { enforceRateLimit, internalError, invalidSessionIdResponse, readSessionId } from "@ui/lib/server-security";
 
@@ -105,6 +106,8 @@ export async function POST(req: Request) {
         messages: messages as any,
         trigger,
         memory: { thread: threadId, resource: CHAT_RESOURCE_ID },
+        // Server-set, never from the body (D-63).
+        maxSteps: ORCHESTRATOR_MAX_STEPS,
       },
       // The default error serializer forwards the provider's raw message and
       // stack (docs/09-TESTING.md P7.4: "no stack traces"). A model call failing

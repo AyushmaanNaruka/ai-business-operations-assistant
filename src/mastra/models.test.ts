@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { allowedProviders, buildModelTiers, providerOf, resolveTierModels } from './models';
+import { describe, expect, it, vi } from 'vitest';
+import { allowedProviders, buildModelTiers, generateStructuredOutput, providerOf, resolveTierModels, type StructuredOutputAgent } from './models';
 
 const FREE = { GOOGLE_GENERATIVE_AI_API_KEY: 'g', GROQ_API_KEY: 'q' };
 const ALL = { ...FREE, ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o' };
@@ -60,5 +60,69 @@ describe('model tiers', () => {
     expect(providerOf('groq/openai/gpt-oss-120b')).toBe('groq');
     expect(providerOf('anthropic/claude-opus-5')).toBe('anthropic');
     expect(providerOf('mistral/large')).toBeNull();
+  });
+});
+
+describe('generateStructuredOutput (D-60)', () => {
+  const GROQ_JSON_TOOL_ERROR = new Error(
+    "Tool call validation failed: tool call validation failed: attempted to call tool 'json' which was not in request.tools",
+  );
+
+  function fakeAgent(generateImpl: (...args: unknown[]) => unknown): StructuredOutputAgent {
+    return { generate: vi.fn(generateImpl) as unknown as StructuredOutputAgent['generate'] };
+  }
+
+  it('returns the object from a well formed call, with jsonPromptInjection on, in one call', async () => {
+    const agent = fakeAgent(() => Promise.resolve({ object: { answer: 'ok' } }));
+    const result = await generateStructuredOutput(agent, 'prompt', { schema: true });
+
+    expect(result).toEqual({ answer: 'ok' });
+    expect(agent.generate).toHaveBeenCalledTimes(1);
+    const [, options] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[0] as [string, { structuredOutput: { jsonPromptInjection?: boolean } }];
+    expect(options.structuredOutput.jsonPromptInjection).toBe(true);
+  });
+
+  it("retries once without jsonPromptInjection when Groq rejects a hallucinated 'json' tool call", async () => {
+    const agent = fakeAgent(
+      vi
+        .fn()
+        .mockRejectedValueOnce(GROQ_JSON_TOOL_ERROR)
+        .mockResolvedValueOnce({ object: { answer: 'recovered' } }),
+    );
+
+    const result = await generateStructuredOutput(agent, 'prompt', { schema: true });
+
+    expect(result).toEqual({ answer: 'recovered' });
+    expect(agent.generate).toHaveBeenCalledTimes(2);
+    const [, retryOptions] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[1] as [string, { structuredOutput: { jsonPromptInjection?: boolean } }];
+    expect(retryOptions.structuredOutput.jsonPromptInjection).toBeUndefined();
+  });
+
+  it("retries once without jsonPromptInjection when Groq rejects json mode combined with other tools (D-62)", async () => {
+    const agent = fakeAgent(
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error('json mode cannot be combined with tool/function calling'))
+        .mockResolvedValueOnce({ object: { answer: 'recovered' } }),
+    );
+
+    const result = await generateStructuredOutput(agent, 'prompt', { schema: true });
+
+    expect(result).toEqual({ answer: 'recovered' });
+    expect(agent.generate).toHaveBeenCalledTimes(2);
+    const [, retryOptions] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[1] as [string, { structuredOutput: { jsonPromptInjection?: boolean } }];
+    expect(retryOptions.structuredOutput.jsonPromptInjection).toBeUndefined();
+  });
+
+  it('does not retry, and rethrows, on any other error', async () => {
+    const agent = fakeAgent(() => Promise.reject(new Error('some other failure')));
+    await expect(generateStructuredOutput(agent, 'prompt', { schema: true })).rejects.toThrow('some other failure');
+    expect(agent.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows if the retry itself still fails', async () => {
+    const agent = fakeAgent(vi.fn().mockRejectedValue(GROQ_JSON_TOOL_ERROR));
+    await expect(generateStructuredOutput(agent, 'prompt', { schema: true })).rejects.toThrow(GROQ_JSON_TOOL_ERROR.message);
+    expect(agent.generate).toHaveBeenCalledTimes(2);
   });
 });

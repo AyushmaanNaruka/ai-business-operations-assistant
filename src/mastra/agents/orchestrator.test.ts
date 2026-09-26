@@ -3,6 +3,7 @@ import type { Agent } from '@mastra/core/agent';
 import type { Artifact, Evidence, Finding, MetricKey, SessionManifest, SpecialistTask, Source } from '@/types';
 import { emptyManifest, addSource, addFinding, addArtifact } from '@/modules/session';
 import {
+  buildFinding,
   buildPlan,
   checkSourcesReady,
   classifyIntent,
@@ -792,5 +793,40 @@ describe('runTurn: conflicts (P5.6)', () => {
     });
 
     expect(turn.conflicts).toBeUndefined();
+  });
+});
+
+describe('buildFinding (D-63)', () => {
+  const ev = (id: string, confidence: Evidence['confidence']): Evidence => ({
+    id,
+    claim: `claim ${id}`,
+    kind: 'computed',
+    sourceId: 'src_1',
+    sourceName: 'campaigns.xlsx',
+    locator: 'campaigns',
+    method: 'SELECT 1',
+    value: 1,
+    confidence,
+    createdAt: '2026-09-27T00:00:00.000Z',
+  });
+
+  it('cites only evidence the ledger holds, at the weakest cited confidence, carrying gaps as caveats', () => {
+    const result = { answer: 'Email converts best.', evidence: [ev('E1', 'high'), ev('E2', 'medium'), ev('E9', 'high')], gaps: ['No CLV column'], failures: [] };
+
+    const finding = buildFinding('data', 'which channel converts best', result, [ev('E1', 'high'), ev('E2', 'medium')]);
+
+    expect(finding).toEqual({
+      statement: 'Email converts best.',
+      evidenceIds: ['E1', 'E2'],
+      reasoning: 'Established by the data specialist for: which channel converts best',
+      soWhat: '',
+      confidence: 'medium',
+      caveats: ['No CLV column'],
+    });
+  });
+
+  it('returns null when none of the cited evidence exists in the ledger', () => {
+    const result = { answer: 'A claim.', evidence: [ev('E9', 'high')], gaps: [], failures: [] };
+    expect(buildFinding('document', 'x', result, [])).toBeNull();
   });
 });

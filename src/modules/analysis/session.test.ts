@@ -63,16 +63,15 @@ describe('DuckDB session and registerFile', () => {
     expect(threw).toBe(true);
   });
 
-  it('registerFile refuses to run on a session already locked down', async () => {
+  it('registerFile still registers a file on a session already locked down (D-64)', async () => {
     session = await createSession('s6');
     await disableExternalAccess(session);
 
-    const result = await registerFile(session, join(FIXTURES, 'sample.csv'), 'too_late');
+    const result = await registerFile(session, join(FIXTURES, 'sample.csv'), 'after_lock');
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('QUERY_INVALID');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.rowCount).toBe(2);
   });
-
   it('disableExternalAccess is idempotent', async () => {
     session = await createSession('s7');
     await disableExternalAccess(session);

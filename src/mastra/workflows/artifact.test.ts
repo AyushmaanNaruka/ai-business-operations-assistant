@@ -104,6 +104,60 @@ describe('artifact workflow (graph level)', () => {
     expect(storeArtifactFileFn).toHaveBeenCalledTimes(1);
   });
 
+  it('resolves real Data rows for an xlsx run whose caller left dataRows empty, and never touches the resolver for a non-xlsx run', async () => {
+    const rows = [{ channel: 'Email', revenue: 100 }];
+    const getWorkbookDataRowsDeps = vi.fn().mockResolvedValue({
+      getSource: vi.fn().mockReturnValue({ tables: [{ tableName: 'campaigns' }] }),
+      query: vi.fn().mockResolvedValue({ ok: true, data: { rows } }),
+    });
+    const renderArtifactFileFn = vi.fn().mockResolvedValue({ buffer: Buffer.from('xlsx bytes') });
+    const storeArtifactFileFn = vi.fn().mockResolvedValue(fakeArtifact({ kind: 'xlsx', skillUsed: 'excel-workbook' }));
+    const authorAndValidateFn = vi.fn().mockResolvedValue({ ok: true, plan: { title: 'A valid plan' } });
+
+    const workflow = buildArtifactWorkflow({
+      getLedger: async () => fakeLedger,
+      getStore: async () => ({ saveVersion: vi.fn() }) as unknown as Pick<ArtifactStore, 'saveVersion'>,
+      getWorkbookDataRowsDeps,
+      loadSkill: async () => 'SKILL TEXT',
+      authorAndValidateFn,
+      renderChartsPrecheckFn: async () => ({ ok: true }),
+      renderArtifactFileFn,
+      storeArtifactFileFn,
+    });
+
+    const run = await workflow.createRun();
+    await run.start({ inputData: { ...baseInput, planKind: 'workbook' as const, title: 'Metrics Workbook' } });
+
+    expect(getWorkbookDataRowsDeps).toHaveBeenCalledTimes(1);
+    const renderCallArgs = renderArtifactFileFn.mock.calls[0]![0] as { dataRows: unknown };
+    expect(renderCallArgs.dataRows).toEqual(rows);
+  });
+
+  it('never resolves Data rows for a non-xlsx run: report renders with the caller\'s (empty) dataRows untouched', async () => {
+    const getWorkbookDataRowsDeps = vi.fn();
+    const renderArtifactFileFn = vi.fn().mockResolvedValue({ buffer: Buffer.from('docx bytes') });
+    const storeArtifactFileFn = vi.fn().mockResolvedValue(fakeArtifact());
+    const authorAndValidateFn = vi.fn().mockResolvedValue({ ok: true, plan: { title: 'A valid plan' } });
+
+    const workflow = buildArtifactWorkflow({
+      getLedger: async () => fakeLedger,
+      getStore: async () => ({ saveVersion: vi.fn() }) as unknown as Pick<ArtifactStore, 'saveVersion'>,
+      getWorkbookDataRowsDeps,
+      loadSkill: async () => 'SKILL TEXT',
+      authorAndValidateFn,
+      renderChartsPrecheckFn: async () => ({ ok: true }),
+      renderArtifactFileFn,
+      storeArtifactFileFn,
+    });
+
+    const run = await workflow.createRun();
+    await run.start({ inputData: baseInput });
+
+    expect(getWorkbookDataRowsDeps).not.toHaveBeenCalled();
+    const renderCallArgs = renderArtifactFileFn.mock.calls[0]![0] as { dataRows: unknown };
+    expect(renderCallArgs.dataRows).toEqual([]);
+  });
+
   it('suspends rather than completing when authorAndValidate fails (forced two-attempt validation failure), and never renders or stores anything', async () => {
     const renderArtifactFileFn = vi.fn();
     const storeArtifactFileFn = vi.fn();

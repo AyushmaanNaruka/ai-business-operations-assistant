@@ -25,7 +25,7 @@ import { renderPptx } from '@/modules/artifacts/renderers/renderPptx';
 import { renderXlsx } from '@/modules/artifacts/renderers/renderXlsx';
 import type { EvidenceLedger } from '@/modules/evidence';
 import type { ArtifactStore } from '@/modules/artifacts/store';
-import { MODELS } from '../models';
+import { generateStructuredOutput, MODELS } from '../models';
 
 /**
  * The plain, dependency-injected step logic behind the artifact workflow
@@ -107,6 +107,38 @@ export async function gatherEvidenceForArtifact(
   const evidenceIds = [...new Set(findings.flatMap((f) => f.evidenceIds))];
   const evidence = await ledger.getEvidence(evidenceIds);
   return { findings, evidence };
+}
+
+/** The minimum the xlsx Data sheet needs from the shared runtime: a source lookup and a query function. */
+export type WorkbookDataRowsDeps = {
+  getSource: (sourceId: string) => { tables?: { tableName: string }[] } | undefined;
+  query: (sql: string) => Promise<{ ok: boolean; data?: { rows: Record<string, unknown>[] } }>;
+};
+
+/**
+ * Resolves the workbook's Data sheet rows (docs/DECISIONS.md D-41, closed): the
+ * underlying table of whichever computed-evidence source the gathered evidence cites
+ * most, not an aggregate of the evidence values themselves (skills/excel-workbook/
+ * SKILL.md: "Data: the underlying rows", one sheet, not one per source). Ties break
+ * toward whichever source was cited first. Every failure mode here (no computed
+ * evidence, the source has no registered table, the query itself fails) returns `[]`
+ * rather than throwing: a workbook with an empty Data sheet is a known, visible
+ * degradation; a thrown error would suspend the whole artifact run over a sheet that
+ * is not the one being validated.
+ */
+export async function resolveWorkbookDataRows(evidence: Evidence[], deps: WorkbookDataRowsDeps): Promise<Record<string, unknown>[]> {
+  const computedSourceIds = evidence.filter((e) => e.kind === 'computed').map((e) => e.sourceId);
+  if (computedSourceIds.length === 0) return [];
+
+  const counts = new Map<string, number>();
+  for (const id of computedSourceIds) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const [primarySourceId] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+
+  const tableName = deps.getSource(primarySourceId)?.tables?.[0]?.tableName;
+  if (!tableName) return [];
+
+  const result = await deps.query(`SELECT * FROM "${tableName}"`);
+  return result.ok && result.data ? result.data.rows : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +225,10 @@ export type AuthorPlanParams = {
  * conflict D-38 root-caused for Gemini does not apply here. Left on anyway because it
  * is harmless with no tools attached and keeps every structured-output call in this
  * codebase using the same mechanism, rather than two different paths for "has tools"
- * and "has no tools".
+ * and "has no tools". `generateStructuredOutput` (models.ts, D-60) is that one
+ * mechanism: it also guards against Groq's `openai/gpt-oss-120b` "json" tool-call
+ * quirk, which this call has not reproduced (no tools attached), but keeping it on the
+ * same helper as `delegate()` means a future tool added here is covered automatically.
  */
 export async function authorPlanOnce(params: AuthorPlanParams, agent: Agent = getAuthorAgent()): Promise<unknown> {
   const schema = PLAN_SCHEMAS[params.planKind];
@@ -224,8 +259,7 @@ export async function authorPlanOnce(params: AuthorPlanParams, agent: Agent = ge
       : []),
   ].join('\n');
 
-  const result = await agent.generate(prompt, { structuredOutput: { schema, jsonPromptInjection: true } });
-  return result.object;
+  return generateStructuredOutput(agent, prompt, schema);
 }
 
 // ---------------------------------------------------------------------------

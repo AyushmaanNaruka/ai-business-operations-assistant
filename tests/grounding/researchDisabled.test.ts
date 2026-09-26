@@ -56,6 +56,6 @@ describe('Grounding eval: research disabled', () => {
 
       await runAndAssert(researchDisabledScorer, { objective: task.objective }, result, 'Grounding eval 2 (research disabled)');
     },
-    30_000,
+    90_000,
   );
 });

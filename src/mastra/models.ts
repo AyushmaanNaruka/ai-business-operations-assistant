@@ -212,3 +212,62 @@ export const MODELS = buildModelTiers(process.env);
 export function describeModels(): { analyst: string[]; router: string | undefined } {
   return { analyst: MODELS.ANALYST.map((m) => m.model), router: MODELS.ROUTER[0]?.model };
 }
+
+/**
+ * D-60 (D-62 widened the detection, same fix): on a tool-calling call (specialist
+ * delegation, artifact authoring, an agent whose tools are declared but currently
+ * unusable, e.g. the research agent with no search keys), Groq's `openai/gpt-oss-120b`
+ * rejects `jsonPromptInjection: true` (contracts.ts's `delegate()`, artifactSteps.ts's
+ * `authorPlanOnce`) two different ways, both discarding an already well-formed answer:
+ *
+ * 1. It answers by calling a tool named "json" that was never declared (prompt
+ *    injection deliberately avoids registering one, to sidestep a separate, confirmed
+ *    Gemini conflict below): "Tool call validation failed: ... attempted to call tool
+ *    'json' which was not in request.tools" (400, isRetryable: false).
+ * 2. When the agent has other real tools declared, Groq's API rejects the call outright
+ *    before the model even runs: "json mode cannot be combined with tool/function
+ *    calling". `jsonPromptInjection: true` avoids this exact conflict on Gemini (the
+ *    reason it was chosen at all, D-38) but not on Groq, whose API is stricter about
+ *    the same request shape.
+ *
+ * Retrying the same call with `jsonPromptInjection` left off resolves both: Mastra's
+ * native structured-output mode on a tool-calling model registers a *real* "json" tool
+ * and forces tool_choice to it (pure function-calling, no separate JSON response mode
+ * to conflict with the agent's other tools), so whichever model actually serves the
+ * retry gets a request that matches what it wants to call. Only retried on these two
+ * exact failure signatures, once, so a genuinely malformed model response (any other
+ * error) still surfaces as before. Both are Gemini-quota-exhaustion-shaped: they only
+ * bite once the fallback chain (D-53) reaches Groq, which is otherwise silent in normal
+ * operation.
+ */
+const GROQ_JSON_STRUCTURED_OUTPUT_FALLBACK_ERROR =
+  /attempted to call tool ['"]json['"] which was not in request\.tools|json mode cannot be combined with tool\/function calling/i;
+
+function isGroqJsonStructuredOutputFallbackError(err: unknown): boolean {
+  return err instanceof Error && GROQ_JSON_STRUCTURED_OUTPUT_FALLBACK_ERROR.test(err.message);
+}
+
+/**
+ * Agent loop step budgets (D-63). Mastra's default is 5, which a specialist spends on
+ * list_datasets, describe_dataset and a couple of run_sql attempts before it ever
+ * writes its answer: the run then ends on `finishReason: "tool-calls"` with an empty
+ * `object`, surfacing as a PARSE_FAILED gap. Gemini 2.5 Flash usually fits in 5; the
+ * fallback models (D-53) retry SQL more and did not, measured live.
+ */
+export const SPECIALIST_MAX_STEPS = 12;
+export const ORCHESTRATOR_MAX_STEPS = 10;
+
+export type StructuredOutputAgent = { generate: (prompt: string, options: unknown) => Promise<{ object: unknown }> };
+
+export async function generateStructuredOutput(
+  agent: StructuredOutputAgent,
+  prompt: string,
+  schema: unknown,
+): Promise<unknown> {
+  try {
+    return (await agent.generate(prompt, { structuredOutput: { schema, jsonPromptInjection: true }, maxSteps: SPECIALIST_MAX_STEPS })).object;
+  } catch (err) {
+    if (!isGroqJsonStructuredOutputFallbackError(err)) throw err;
+    return (await agent.generate(prompt, { structuredOutput: { schema }, maxSteps: SPECIALIST_MAX_STEPS })).object;
+  }
+}

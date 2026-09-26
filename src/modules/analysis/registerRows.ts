@@ -24,13 +24,6 @@ type ColumnPlan = { name: string; sqlType: SqlType; values: (number | string | n
  * ingestion path already has for messy real files.
  */
 export async function registerRows(session: DuckDBSession, tableName: string, table: RowTable): Promise<ToolResult<TableRef>> {
-  if (session.locked) {
-    return fail(
-      'QUERY_INVALID',
-      'Cannot register a new table: this session already locked down external file access after running a query.',
-      { suggestion: 'Register every known table before the first query, or start a new session.' },
-    );
-  }
   if (table.rows.length === 0) {
     return fail('NO_DATA', `"${tableName}" has a header row but no data rows to register.`, { recoverable: false });
   }

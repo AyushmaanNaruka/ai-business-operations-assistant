@@ -14,6 +14,7 @@ import {
   renderArtifactFile,
   renderChartsPrecheck,
   resolveFormat,
+  resolveWorkbookDataRows,
   skillNameFor,
   storeArtifactFile,
 } from './artifactSteps';
@@ -130,6 +131,62 @@ describe('gatherEvidenceForArtifact', () => {
     expect(new Set(requestedIds)).toEqual(new Set(['E1', 'E2', 'E3']));
     expect(result.findings).toEqual([findingA, findingB]);
     expect(result.evidence).toEqual([sampleEvidence]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. resolveWorkbookDataRows
+// ---------------------------------------------------------------------------
+
+describe('resolveWorkbookDataRows', () => {
+  it('returns [] without looking anything up when there is no computed evidence', async () => {
+    const getSource = vi.fn();
+    const query = vi.fn();
+    const documentEvidence: Evidence = { ...sampleEvidence, id: 'E9', kind: 'document', sourceId: 'src_2' };
+
+    const result = await resolveWorkbookDataRows([documentEvidence], { getSource, query });
+
+    expect(result).toEqual([]);
+    expect(getSource).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('queries the most-cited computed source\'s table and returns its rows', async () => {
+    const evidence: Evidence[] = [
+      { ...sampleEvidence, id: 'E1', sourceId: 'src_1' },
+      { ...sampleEvidence, id: 'E2', sourceId: 'src_1' },
+      { ...sampleEvidence, id: 'E3', sourceId: 'src_2' }, // cited once, should lose the tie-break
+    ];
+    const getSource = vi.fn((sourceId: string) =>
+      sourceId === 'src_1' ? { tables: [{ tableName: 'campaigns' }] } : { tables: [{ tableName: 'other' }] },
+    );
+    const rows = [{ channel: 'Email', revenue: 100 }];
+    const query = vi.fn().mockResolvedValue({ ok: true, data: { rows } });
+
+    const result = await resolveWorkbookDataRows(evidence, { getSource, query });
+
+    expect(getSource).toHaveBeenCalledWith('src_1');
+    expect(query).toHaveBeenCalledWith('SELECT * FROM "campaigns"');
+    expect(result).toEqual(rows);
+  });
+
+  it('returns [] when the cited source has no registered table', async () => {
+    const getSource = vi.fn().mockReturnValue({ tables: [] });
+    const query = vi.fn();
+
+    const result = await resolveWorkbookDataRows([sampleEvidence], { getSource, query });
+
+    expect(result).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('returns [] rather than throwing when the query itself fails', async () => {
+    const getSource = vi.fn().mockReturnValue({ tables: [{ tableName: 'campaigns' }] });
+    const query = vi.fn().mockResolvedValue({ ok: false });
+
+    const result = await resolveWorkbookDataRows([sampleEvidence], { getSource, query });
+
+    expect(result).toEqual([]);
   });
 });
 

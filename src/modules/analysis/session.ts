@@ -6,10 +6,10 @@ import { fail, ok } from '@/modules/reliability';
 /**
  * One in-memory DuckDB database per session (docs/04-MODULES.md M2). `locked`
  * tracks whether `SET enable_external_access = false` has run: once true, it
- * can never go back to false (DuckDB does not allow re-enabling it), and
- * `registerFile` refuses further direct file reads. `query()` (the only
- * agent-facing execution path) locks the session automatically on its first
- * call, so untrusted SQL can never run while file/network access is open.
+ * can never go back to false (DuckDB does not allow re-enabling it). `query()`
+ * (the only agent-facing execution path) locks the session automatically on
+ * its first call, so untrusted SQL can never run while file/network access is
+ * open. Registration still works after the lock (D-64).
  */
 export type DuckDBSession = {
   readonly id: string;
@@ -31,9 +31,8 @@ export function closeSession(session: DuckDBSession): void {
 
 /**
  * Disables DuckDB's own filesystem and network access for this session. A
- * one-way switch: once called, no further `registerFile` calls will succeed
- * on this session. Called automatically by `query()`; exposed here so the
- * ingestion pipeline can call it explicitly once all known files are loaded.
+ * one-way switch. Called automatically by `query()`; exposed so a caller can
+ * lock a session before handing it to anything untrusted.
  */
 export async function disableExternalAccess(session: DuckDBSession): Promise<void> {
   if (session.locked) return;
@@ -49,24 +48,21 @@ const READERS: Record<string, (escapedPath: string) => string> = {
 };
 
 /**
- * Registers a CSV, XLSX, JSON or Parquet file as a DuckDB table, reading it
- * directly rather than parsing it in Node first (docs/04-MODULES.md M2).
+ * Registers a CSV, XLSX, JSON or Parquet file as a DuckDB table using DuckDB's
+ * own readers rather than parsing it in Node (docs/04-MODULES.md M2).
  * Internal ingestion plumbing only: never exposed to the agent, which only
  * ever sees table names already registered here.
+ *
+ * The file is read by a short-lived loader instance that only ever runs this
+ * function's fixed SQL, and its rows are appended into the session. The
+ * session itself never reads the file, so this works the same before and
+ * after `query()` has locked it (D-64).
  */
 export async function registerFile(
   session: DuckDBSession,
   path: string,
   tableName: string,
 ): Promise<ToolResult<TableRef>> {
-  if (session.locked) {
-    return fail(
-      'QUERY_INVALID',
-      'Cannot register a new file: this session already locked down external file access after running a query.',
-      { suggestion: 'Register every known file before the first query, or start a new session.' },
-    );
-  }
-
   const ext = extname(path).toLowerCase();
   const reader = READERS[ext];
   if (!reader) {
@@ -78,14 +74,38 @@ export async function registerFile(
   const escapedPath = path.replace(/'/g, "''");
   const quotedTable = quoteIdent(tableName);
 
+  let loader: DuckDBInstance | undefined;
+  let loaderConnection: DuckDBConnection | undefined;
+  let created = false;
   try {
-    await session.connection.run(`CREATE TABLE ${quotedTable} AS SELECT * FROM ${reader(escapedPath)}`);
+    loader = await DuckDBInstance.create(':memory:');
+    loaderConnection = await loader.connect();
+    await loaderConnection.run(`CREATE TABLE staged AS SELECT * FROM ${reader(escapedPath)}`);
+
+    const described = await loaderConnection.runAndReadAll('DESCRIBE staged');
+    const columnDefs = (described.getRowObjectsJson() as Record<string, string>[])
+      .map((row) => `${quoteIdent(String(row.column_name))} ${String(row.column_type)}`)
+      .join(', ');
+    await session.connection.run(`CREATE TABLE ${quotedTable} (${columnDefs})`);
+    created = true;
+
+    const appender = await session.connection.createAppender(tableName);
+    const rows = await loaderConnection.run('SELECT * FROM staged');
+    for (let chunk = await rows.fetchChunk(); chunk && chunk.rowCount > 0; chunk = await rows.fetchChunk()) {
+      appender.appendDataChunk(chunk);
+    }
+    appender.closeSync();
+
     const summary = await summarizeTable(session, tableName);
     return ok(summary);
   } catch (err) {
+    if (created) await session.connection.run(`DROP TABLE IF EXISTS ${quotedTable}`).catch(() => undefined);
     return fail('PARSE_FAILED', `Could not register "${path}" as a table: ${(err as Error).message}`, {
       recoverable: false,
     });
+  } finally {
+    loaderConnection?.closeSync();
+    loader?.closeSync();
   }
 }
 

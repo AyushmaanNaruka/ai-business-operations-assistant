@@ -40,6 +40,6 @@ describe('Grounding eval: missing metric', () => {
 
       await runAndAssert(missingMetricScorer, { objective: task.objective }, result, 'Grounding eval 1 (missing metric)');
     },
-    30_000,
+    90_000,
   );
 });

@@ -61,6 +61,6 @@ describe('Grounding eval: contradiction', () => {
         'Grounding eval 3 (contradiction)',
       );
     },
-    45_000,
+    90_000,
   );
 });

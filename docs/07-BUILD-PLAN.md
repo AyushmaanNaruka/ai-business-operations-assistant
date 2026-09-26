@@ -88,7 +88,7 @@ nothing.
 - [x] `renderDocx` and `renderPdf` (P6.5: both built, not cut)
 - [x] Tests: each house rule rejects a bad plan, each renderer produces an openable file (verified at the real ZIP/XML/PNG byte level throughout, not just structurally)
 
-**Demonstrable:** generate a deck and a workbook from the conversation, then revise one. Wired end to end via `request_artifact` (P6.7): multiple artifacts in one request run in parallel, an unlisted type routes to `generic-document` instead of a refusal, and every completed result carries its real `downloadUrl`. Known gap, tracked in D-41: workbook Data sheets ship empty until Phase 7 makes a live queryable dataset reachable from the orchestrator (it has no domain tools of its own by design).
+**Demonstrable:** generate a deck and a workbook from the conversation, then revise one. Wired end to end via `request_artifact` (P6.7): multiple artifacts in one request run in parallel, an unlisted type routes to `generic-document` instead of a refusal, and every completed result carries its real `downloadUrl`. D-41's workbook Data sheet gap is closed as of D-61 (P8.1): the artifact workflow resolves real rows itself from the shared runtime D-42 built, rather than shipping an empty Data sheet.
 
 ---
 

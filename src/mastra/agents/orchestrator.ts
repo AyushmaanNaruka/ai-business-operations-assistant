@@ -4,9 +4,9 @@ import { createTool } from '@mastra/core/tools';
 import { Memory } from '@mastra/memory';
 import { z } from 'zod';
 import type { Artifact, ArtifactKind, Evidence, MetricKey, SessionManifest, SpecialistResult, SpecialistTask, ToolResult } from '@/types';
-import { addArtifact, addOpenGap, renderManifest, resolveReference, type ReferenceResolution } from '@/modules/session';
+import { addArtifact, addFinding, addOpenGap, renderManifest, resolveReference, type ReferenceResolution } from '@/modules/session';
 import { ArtifactPlanKindSchema, type ArtifactPlanKind } from '@/modules/artifacts/schemas';
-import { detectConflicts, openLedger, type Conflict, type EvidenceLedger } from '@/modules/evidence';
+import { detectConflicts, openLedger, type AddFindingInput, type Conflict, type EvidenceLedger } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
 import { MODELS } from '../models';
 import { resolveSessionId } from '../runtime';
@@ -600,6 +600,38 @@ export async function runDelegation(
   }
 }
 
+const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 } as const;
+
+/**
+ * The Finding a successful specialist outcome becomes (D-63): its answer, citing only
+ * evidence the ledger actually holds (`ledgerEvidence`, looked up by the caller), so a
+ * specialist that returns an id it never recorded cannot smuggle it into an artifact.
+ * Confidence is the weakest cited entry's: a conclusion is no stronger than its
+ * weakest fact. No confirmed evidence means no finding, since nothing grounds it.
+ */
+export function buildFinding(
+  specialist: SpecialistLabel,
+  objective: string,
+  result: SpecialistResult,
+  ledgerEvidence: Evidence[],
+): AddFindingInput | null {
+  const cited = new Set(result.evidence.map((e) => e.id));
+  const confirmed = ledgerEvidence.filter((e) => cited.has(e.id));
+  if (confirmed.length === 0) return null;
+  const confidence = confirmed.reduce<Evidence['confidence']>(
+    (lowest, e) => (CONFIDENCE_RANK[e.confidence] < CONFIDENCE_RANK[lowest] ? e.confidence : lowest),
+    'high',
+  );
+  return {
+    statement: result.answer,
+    evidenceIds: confirmed.map((e) => e.id),
+    reasoning: `Established by the ${specialist} specialist for: ${objective}`,
+    soWhat: '',
+    confidence,
+    ...(result.gaps.length > 0 ? { caveats: result.gaps } : {}),
+  };
+}
+
 export type SpecialistOutcome = { specialist: SpecialistLabel; result: ToolResult<SpecialistResult> };
 
 export type TurnAction = 'wait' | 'not_found' | 'unsupported' | 'artifact_stub' | 'answer_directly' | 'delegate';
@@ -907,6 +939,17 @@ export const handleRequestTool = createTool({
         for (const gap of outcome.result.data.gaps) {
           nextManifest = addOpenGap(nextManifest, gap);
         }
+        // Findings are what request_artifact builds from and what later turns'
+        // knownFacts draw on, so every grounded answer becomes one (D-63). A ledger
+        // failure here must not discard the answer the specialist already produced.
+        try {
+          const ledger = await getEvidenceLedger();
+          const ledgerEvidence = await ledger.getEvidence(outcome.result.data.evidence.map((e) => e.id));
+          const input = buildFinding(outcome.specialist, inputData.objective, outcome.result.data, ledgerEvidence);
+          if (input) nextManifest = addFinding(nextManifest, await ledger.addFinding(input));
+        } catch {
+          // best effort: the answer still reaches the user, it just is not reusable later
+        }
       }
       if (nextManifest !== manifest) {
         await store.saveManifest(sessionId, nextManifest);
@@ -976,9 +1019,8 @@ export const resolveReferenceTool = createTool({
 
 // P6.7: one entry per requested artifact, discriminated on how the workflow run for it
 // came out. "completed" carries the real Artifact.downloadUrl/version and a one-line
-// description (never invented by this file: workbook's description names the known
-// dataRows:[] limitation honestly rather than silently shipping an empty Data sheet).
-// "suspended" surfaces authorAndValidate's actual errors after two failed attempts
+// description (never invented by this file). "suspended" surfaces authorAndValidate's
+// actual errors after two failed attempts
 // (P6.6), never a generic message. "failed" covers anything else (a non-success,
 // non-suspended run status, or an unexpected throw), reported the same way any other
 // specialist failure is, per rule 6: a gap, not a silently swallowed request.
@@ -1004,15 +1046,7 @@ const artifactResultItemSchema = z.discriminatedUnion('status', [
 ]);
 
 function artifactDescription(artifact: Artifact): string {
-  const base = `${artifact.title}, a ${artifact.kind} ${artifact.skillUsed} (version ${artifact.version}).`;
-  // Known, deliberate limitation (docs/DECISIONS.md D-41): the orchestrator has no
-  // domain tools of its own, so it cannot query DuckDB for a workbook's real dataset
-  // rows yet; every run through this tool passes dataRows: [] to the workflow. Say so
-  // honestly rather than shipping a silently empty Data sheet without comment.
-  if (artifact.kind === 'xlsx') {
-    return `${base} Its Data sheet's rows were not attached this run; re-run once the underlying source is directly queryable.`;
-  }
-  return base;
+  return `${artifact.title}, a ${artifact.kind} ${artifact.skillUsed} (version ${artifact.version}).`;
 }
 
 export const requestArtifactTool = createTool({
@@ -1093,8 +1127,11 @@ export const requestArtifactTool = createTool({
                 title: item.title,
                 objective: inputData.objective,
                 findingIds,
-                // Known limitation (docs/DECISIONS.md D-41): no live wiring from this
-                // orchestrator to a queryable dataset yet, so this is always [].
+                // This tool has no domain tools of its own by design, so it never
+                // resolves real rows itself; the artifact workflow's gatherEvidence
+                // step does that when the target format is xlsx (docs/DECISIONS.md
+                // D-41, closed), using the same shared DuckDB session every other
+                // tool call already reads from.
                 dataRows: [],
                 revisionOf: item.revisionOf,
               },

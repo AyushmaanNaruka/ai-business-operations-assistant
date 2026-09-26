@@ -5,7 +5,9 @@ import type { Artifact, ArtifactKind, Evidence, Finding } from '@/types';
 import { ArtifactPlanKindSchema } from '@/modules/artifacts/schemas';
 import { openArtifactStore, type ArtifactStore } from '@/modules/artifacts/store';
 import { openLedger, type EvidenceLedger } from '@/modules/evidence';
+import { query } from '@/modules/analysis';
 import { EvidenceSchema } from '../agents/contracts';
+import { getRuntime } from '../runtime';
 import {
   authorAndValidate,
   gatherEvidenceForArtifact,
@@ -13,7 +15,9 @@ import {
   renderArtifactFile,
   renderChartsPrecheck,
   resolveFormat,
+  resolveWorkbookDataRows,
   storeArtifactFile,
+  type WorkbookDataRowsDeps,
 } from './artifactSteps';
 
 /**
@@ -81,6 +85,23 @@ async function getEvidenceLedgerForWorkflow(): Promise<EvidenceLedger> {
     });
   }
   return ledgerPromise;
+}
+
+/**
+ * Default `WorkbookDataRowsDeps` for the live workflow: the same shared DuckDB session
+ * and source registry every tool call already uses (`getRuntime()`, `src/mastra/
+ * runtime.ts`), so a table an earlier turn's `run_sql` queried is the same table this
+ * resolves against, not a fresh, re-registered copy. `getSource` and `query` are kept as
+ * plain functions here (not the raw `session`/`registry` objects) so
+ * `resolveWorkbookDataRows` itself only ever sees the two operations it needs and stays
+ * trivially mockable in `artifactSteps.test.ts` without a live DuckDB session.
+ */
+async function getLiveWorkbookDataRowsDeps(): Promise<WorkbookDataRowsDeps> {
+  const { session, registry } = await getRuntime();
+  return {
+    getSource: (sourceId) => registry.getSource(sourceId),
+    query: (sql) => query(session, sql),
+  };
 }
 
 let storePromise: Promise<ArtifactStore> | null = null;
@@ -182,6 +203,7 @@ export type ArtifactWorkflowDeps = {
   getLedger?: () => Promise<Pick<EvidenceLedger, 'getFindings' | 'getEvidence'>>;
   getStore?: () => Promise<Pick<ArtifactStore, 'saveVersion'>>;
   gatherEvidence?: typeof gatherEvidenceForArtifact;
+  getWorkbookDataRowsDeps?: () => Promise<WorkbookDataRowsDeps>;
   loadSkill?: typeof loadSkillText;
   authorAndValidateFn?: typeof authorAndValidate;
   renderChartsPrecheckFn?: typeof renderChartsPrecheck;
@@ -193,6 +215,7 @@ export function buildArtifactWorkflow(deps: ArtifactWorkflowDeps = {}) {
   const getLedger = deps.getLedger ?? getEvidenceLedgerForWorkflow;
   const getStore = deps.getStore ?? getArtifactStore;
   const gatherEvidence = deps.gatherEvidence ?? gatherEvidenceForArtifact;
+  const getWorkbookDataRowsDeps = deps.getWorkbookDataRowsDeps ?? getLiveWorkbookDataRowsDeps;
   const loadSkill = deps.loadSkill ?? loadSkillText;
   const runAuthorAndValidate = deps.authorAndValidateFn ?? authorAndValidate;
   const runRenderChartsPrecheck = deps.renderChartsPrecheckFn ?? renderChartsPrecheck;
@@ -218,7 +241,16 @@ export function buildArtifactWorkflow(deps: ArtifactWorkflowDeps = {}) {
     execute: async ({ inputData }) => {
       const ledger = await getLedger();
       const { findings, evidence } = await gatherEvidence(inputData.findingIds, ledger);
-      return { ...inputData, findings, evidence };
+      // D-41 (closed): the caller (orchestrator.ts's request_artifact tool, which has
+      // no domain tools of its own by design) never supplies real dataRows. Only the
+      // xlsx renderer's Data sheet uses them, so this only resolves them when the
+      // caller left dataRows empty and the target format is xlsx; a caller that already
+      // supplied rows (e.g. a future direct caller, or a test) is never overridden.
+      const dataRows =
+        inputData.format === 'xlsx' && inputData.dataRows.length === 0
+          ? await resolveWorkbookDataRows(evidence, await getWorkbookDataRowsDeps())
+          : inputData.dataRows;
+      return { ...inputData, findings, evidence, dataRows };
     },
   });
 

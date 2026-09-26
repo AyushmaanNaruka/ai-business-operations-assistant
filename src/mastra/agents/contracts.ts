@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { SpecialistResult, SpecialistTask } from '@/types/contracts';
 import type { ErrorCode, ToolFailure } from '@/types/toolResult';
 import type { Evidence, EvidenceKind, MetricKey } from '@/types/evidence';
+import { generateStructuredOutput } from '../models';
 
 /**
  * docs/03-ARCHITECTURE.md section 3.2, "The delegation contract": specialists never
@@ -162,6 +163,14 @@ export function buildTask(
  * evidence, gaps, failures }..."), so Mastra's added system-message nudge is
  * reinforcing an instruction that was already there, not introducing a new one.
  *
+ * `generateStructuredOutput` (models.ts, D-60) is what actually issues the call: once
+ * MODELS.ANALYST's fallback chain reaches Groq's `openai/gpt-oss-120b` (Gemini's free
+ * tier exhausted), the same `jsonPromptInjection: true` that fixes Gemini causes this
+ * model to attempt a tool call named "json" that was never declared, which Groq's own
+ * API rejects outright. `generateStructuredOutput` catches exactly that failure and
+ * retries once without prompt injection, letting native tool-mode register the "json"
+ * tool the model actually wants to call.
+ *
  * On a result that fails `SpecialistResultSchema` validation (a missing field, a
  * `gaps` that came back as a string instead of an array, and so on) this throws rather
  * than returning the unvalidated object, so a malformed specialist response can never
@@ -188,11 +197,9 @@ export async function delegate(agent: Agent, task: SpecialistTask): Promise<Spec
     JSON.stringify(validatedTask),
   ].join('\n');
 
-  const result = await agent.generate(prompt, {
-    structuredOutput: { schema: SpecialistResultSchema, jsonPromptInjection: true },
-  });
+  const output = await generateStructuredOutput(agent, prompt, SpecialistResultSchema);
 
-  const parsed = SpecialistResultSchema.safeParse(result.object);
+  const parsed = SpecialistResultSchema.safeParse(output);
   if (!parsed.success) {
     throw new Error(
       `Specialist "${agent.name}" returned a result that does not match SpecialistResultSchema: ${parsed.error.message}`,

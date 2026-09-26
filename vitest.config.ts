@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -24,5 +24,11 @@ export default defineConfig({
     // enough test files exist to change how Vitest bin-packs them into
     // workers. 'forks' trades a little startup cost for real isolation.
     pool: 'forks',
+    // Excludes Vitest's own defaults (node_modules, dist, .git, ...) plus
+    // .claude/worktrees: an agent worktree checked out under the repo root
+    // duplicates every test file, and if its checkout isn't cleaned up
+    // afterwards those duplicates run alongside the real ones and collide
+    // over the same on-disk DuckDB/LibSQL files.
+    exclude: [...configDefaults.exclude, '.claude/**'],
   },
 });
