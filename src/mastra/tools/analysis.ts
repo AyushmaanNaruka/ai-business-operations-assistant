@@ -189,7 +189,10 @@ export const recordEvidenceTool = createTool({
         unit: z.enum(['ratio', 'currency', 'count', 'duration']),
       })
       .optional()
-      .describe('Set this when the value is a comparable metric, so conflict detection can find it.'),
+      .describe(
+        'Set this when the value is a comparable metric, so conflict detection can find it. Lowercase snake case, ' +
+        'e.g. name "conversion_rate", scope "channel=paid_social"; a "<metric>_rank" name with unit "count" holds a position, 1 = best.',
+      ),
   }),
   outputSchema: toolResultSchema(
     z.object({

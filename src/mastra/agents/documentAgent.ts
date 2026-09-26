@@ -83,15 +83,17 @@ Hard rules, in order:
    the passages' general vicinity. Say in your answer that the retrieved passages did not cover it,
    and add the specific thing that was missing to "gaps".
 
-8. When a claim names or compares a specific quantity for a channel, segment, or region (a stated
-   rate or cost, or a ranking claim such as "our strongest channel"), pass record_evidence a "metric"
-   with the SAME normalised name/scope convention the Data Analyst uses for the same real-world
-   quantity (for example name "conversion_rate", scope "channel=paid_social"): this is what lets the
-   system notice when a document's claim and a computed number disagree, instead of the two just
-   sitting side by side unrelated. Never invent the number to make this work: when the document gives
-   no figure, still set "metric" so the claim is comparable, but leave "value" as a short quote of the
-   claim itself ("reported as strongest channel by the growth team, no figure given"), never a
-   fabricated percentage.
+8. Metric keys let code catch a document disagreeing with the data. Keys are lowercase snake case:
+   name like "conversion_rate", scope "<dimension>=<value>" like "channel=paid_social".
+   - A stated figure for a channel, segment or region: set "metric" with that name and scope and
+     the figure as "value" (a rate as a ratio, 3% is 0.03, unit "ratio").
+   - A ranking claim ("our strongest channel", "top segment", "second best region"): set name
+     "<metric>_rank", unit "count", and "value" to the stated position, 1 = best. When the claim names
+     no metric ("strongest performing"), use "conversion_rate_rank" and say in the claim that the
+     document names no metric. Do this even when the ranking is someone's opinion or a gut read: the
+     point is to test it against the data, and the claim text records who said it and how firmly.
+   - A remark with no figure and no position ("doing well", "a solid quarter"): no "metric". Never
+     invent a figure to make a claim comparable.
 `.trim(),
   model: MODELS.ANALYST,
   memory: new Memory(),

@@ -206,18 +206,20 @@ export const recordEvidenceTool = createTool({
     'reranked chunk, confidence "medium"), false when quoted from get_document (full context, confidence ' +
     '"high"); this tool assigns confidence by that rule, it is never passed in. Call this for every claim that ' +
     'will appear in your answer, then use the returned evidence object as-is in your structured output; do not ' +
-    'retype or paraphrase it. Set "metric" whenever the claim names or compares a specific quantity for a ' +
-    'channel/segment/region (a stated rate or cost, or a ranking claim like "our strongest channel"), using the ' +
-    'SAME normalised name/scope convention the Data Analyst uses (e.g. name "conversion_rate", scope ' +
-    '"channel=paid_social") — this is what lets conflict detection (rule 10) match a document claim against a ' +
-    'computed number for the same thing. Never invent a number the document does not state: when the claim is ' +
-    'qualitative, leave "value" as a short quote of the claim itself, not a fabricated figure.',
+    'retype or paraphrase it. Set "metric" when the claim states a figure for a channel/segment/region (e.g. ' +
+    'name "conversion_rate", scope "channel=paid_social", value 0.03), or states a position in a ranking (name ' +
+    '"conversion_rate_rank", unit "count", value 1 for "our strongest channel"), so conflict detection can match ' +
+    'it against the computed figure or rank. Conflicts only compare numeric values; never invent a number the ' +
+    'document does not state, and leave "metric" off purely qualitative remarks.',
   inputSchema: z.object({
     claim: z.string().describe('Human readable statement of the fact, e.g. "Acme targets mid-market SaaS teams in North America"'),
     sourceId: z.string().describe('The source id this claim came from, from list_documents.'),
     sourceName: z.string().describe('The document name, e.g. "northwind-brief.pdf".'),
     locator: z.string().describe('Where in the document, e.g. "page 2, Positioning".'),
-    value: z.union([z.number(), z.string()]).optional().describe('A quoted number, or a short quote of the claim when it names no figure.'),
+    value: z
+      .union([z.number(), z.string()])
+      .optional()
+      .describe('The stated figure, or the stated position for a "_rank" metric (1 = best); required as a number when "metric" is set.'),
     metric: z
       .object({
         name: z.string(),
@@ -241,6 +243,17 @@ export const recordEvidenceTool = createTool({
     retrieved: boolean;
   }) =>
     safe(async () => {
+      if (inputData.metric && typeof inputData.value !== 'number') {
+        return fail(
+          'UNSUPPORTED',
+          '"metric" was set without a numeric "value", so conflict detection could never compare this claim.',
+          {
+            recoverable: true,
+            suggestion:
+              'Set "value" to the figure the document states (a rate as a ratio) or, for a "_rank" metric, the stated position (1 = best). If the document states neither, record the claim without "metric".',
+          },
+        );
+      }
       const { ledger } = await getRuntime();
       const evidence = await ledger.addEvidence({
         claim: inputData.claim,

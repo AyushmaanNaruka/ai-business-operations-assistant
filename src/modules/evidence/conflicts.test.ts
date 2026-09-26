@@ -56,32 +56,75 @@ describe('detectConflicts', () => {
     expect(detectConflicts([a, b])).toHaveLength(0);
   });
 
-  it('fires on a qualitative claim against a computed number under the same metric key', () => {
-    const computed = makeEvidence({
-      kind: 'computed',
-      value: 0.018,
-      sourceName: 'campaigns.xlsx',
-      metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' },
-    });
-    const claimed = makeEvidence({
-      kind: 'document',
-      claim: 'Growth team says Paid Social is the strongest channel this year',
-      value: 'reported as strongest channel by the growth team, no figure given',
-      sourceName: 'customer-notes.docx',
-      metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' },
+  describe('ranking claims', () => {
+    const rankKey = { name: 'conversion_rate_rank', scope: 'channel=paid_social', unit: 'count' } as const;
+
+    function claimedTop(overrides: Partial<Evidence> = {}): Evidence {
+      return makeEvidence({
+        kind: 'document',
+        claim: 'Growth team says Paid Social is the strongest performing channel this year',
+        value: 1,
+        sourceName: 'customer-notes.docx',
+        metric: rankKey,
+        ...overrides,
+      });
+    }
+
+    it('fires when a claimed rank 1 meets a computed rank 6', () => {
+      const claimed = claimedTop();
+      const computed = makeEvidence({ claim: 'Paid Social ranks 6th of 6 channels by conversion rate', value: 6, metric: rankKey });
+
+      const conflicts = detectConflicts([claimed, computed]);
+
+      expect(conflicts).toHaveLength(1);
+      expect([conflicts[0]!.a.value, conflicts[0]!.b.value].sort()).toEqual([1, 6]);
     });
 
-    const conflicts = detectConflicts([computed, claimed]);
+    it('fires on adjacent ranks that a 5% count tolerance would call equal', () => {
+      const a = makeEvidence({ value: 20, metric: { ...rankKey, scope: 'campaign=x' } });
+      const b = makeEvidence({ value: 21, metric: { ...rankKey, scope: 'campaign=x' } });
 
-    expect(conflicts).toHaveLength(1);
-    expect([conflicts[0]!.a.id, conflicts[0]!.b.id].sort()).toEqual([computed.id, claimed.id].sort());
+      expect(detectConflicts([a, b])).toHaveLength(1);
+    });
+
+    it('stays silent when the claimed and computed ranks agree', () => {
+      const claimed = claimedTop();
+      const computed = makeEvidence({ value: 1, metric: rankKey });
+
+      expect(detectConflicts([claimed, computed])).toHaveLength(0);
+    });
+
+    it('stays silent when the scopes differ', () => {
+      const claimed = claimedTop();
+      const computed = makeEvidence({ value: 6, metric: { ...rankKey, scope: 'channel=email' } });
+
+      expect(detectConflicts([claimed, computed])).toHaveLength(0);
+    });
+
+    it('matches keys that differ only in case, spacing or hyphens', () => {
+      const claimed = claimedTop({ metric: { name: 'Conversion Rate Rank', scope: 'Channel = Paid Social', unit: 'count' } });
+      const computed = makeEvidence({ value: 6, metric: { name: 'conversion_rate_rank', scope: 'channel=paid-social', unit: 'count' } });
+
+      expect(detectConflicts([claimed, computed])).toHaveLength(1);
+    });
   });
 
-  it('stays silent when a qualitative value is an empty string', () => {
-    const computed = makeEvidence({ value: 0.018, metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
-    const empty = makeEvidence({ value: '', metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
+  it('compares a digit string value, as DuckDB returns for DECIMAL columns, as a number', () => {
+    const asString = makeEvidence({ value: '0.030110231560257453', metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
+    const stated = makeEvidence({ kind: 'document', value: 0.06, metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
 
-    expect(detectConflicts([computed, empty])).toHaveLength(0);
+    expect(detectConflicts([asString, stated])).toHaveLength(1);
+  });
+
+  it('never compares a quoted phrase with a number, since code cannot tell whether they agree', () => {
+    const computed = makeEvidence({ value: 0.018, metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' } });
+    const quoted = makeEvidence({
+      kind: 'document',
+      value: 'reported as strongest channel by the growth team, no figure given',
+      metric: { name: 'conversion_rate', scope: 'channel=paid_social', unit: 'ratio' },
+    });
+
+    expect(detectConflicts([computed, quoted])).toHaveLength(0);
   });
 
   it('applies a relative tolerance for currency', () => {

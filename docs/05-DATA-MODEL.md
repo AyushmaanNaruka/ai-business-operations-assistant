@@ -89,7 +89,9 @@ export type MetricKey = {
 | Web page content | medium |
 | Inferred across sources | low, and labelled as an inference |
 
-**Conflicts** are detected on matching `metric.name` plus `metric.scope`, with a tolerance by unit. Entries with no `metric` are never compared, which is correct for prose claims.
+**Conflicts** are detected on matching `metric.name` plus `metric.scope` (compared lowercase, with spaces and hyphens folded to underscores), with a tolerance by unit. Only numeric values are compared; entries with no `metric`, or a quoted phrase as `value`, are never compared, which is correct for prose claims.
+
+**Ranking claims** use a `<metric>_rank` name with unit `count` and the position as `value`, 1 = best, compared exactly. A document saying "Paid Social is our strongest channel" records `{name: "conversion_rate_rank", scope: "channel=paid_social", unit: "count"}` with value 1 (the stated position, not an invented figure); the Data Analyst records the same key with the rank computed by SQL. Rank 1 claimed against rank 6 computed is a conflict.
 
 ---
 

@@ -22,54 +22,65 @@ const CONFLICTS: Record<MetricKey['unit'], (a: number, b: number) => boolean> = 
   duration: (a, b) => relativeDiff(a, b) > 0.05,
 };
 
+// A "_rank" name holds a position (1 = best), so any difference is a
+// disagreement; the count unit's 5% tolerance would call rank 20 and 21 equal.
+function isRank(metric: MetricKey): boolean {
+  return normalise(metric.name).endsWith('_rank');
+}
+
+function normalise(part: string): string {
+  return part
+    .trim()
+    .toLowerCase()
+    .replace(/\s*=\s*/g, '=')
+    .replace(/[\s-]+/g, '_');
+}
+
 function metricKeyId(metric: MetricKey): string {
-  return `${metric.name}::${metric.scope}`;
+  return `${normalise(metric.name)}::${normalise(metric.scope)}`;
+}
+
+// DuckDB hands some numeric types (DECIMAL, HUGEINT) back as digit strings.
+function numericValue(value: Evidence['value']): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string' && /^\s*-?\d+(\.\d+)?(e[+-]?\d+)?\s*$/i.test(value)) return Number(value);
+  return undefined;
+}
+
+function disagree(metric: MetricKey, a: number, b: number): boolean {
+  return isRank(metric) ? Math.round(a) !== Math.round(b) : CONFLICTS[metric.unit](a, b);
 }
 
 /**
- * Compares evidence entries with a matching `metric.name` + `metric.scope`.
- * Entries without a `metric` are never compared (correct for prose claims).
- * A pair whose values differ beyond the unit's tolerance is surfaced as a
+ * Compares evidence entries with a matching `metric.name` + `metric.scope`
+ * (case, spacing and hyphens normalised). Entries without a `metric`, or
+ * without a numeric value, are never compared: code cannot tell whether a
+ * quoted phrase agrees with a number. A qualitative ranking claim ("our
+ * strongest channel") becomes comparable as a "_rank" metric, position 1,
+ * against the SQL computed rank. A pair that disagrees is surfaced as a
  * Conflict with both sides; nothing is resolved or picked. docs/04-MODULES.md
  * M5.
  */
 export function detectConflicts(evidence: Evidence[]): Conflict[] {
-  const groups = new Map<string, Evidence[]>();
+  const groups = new Map<string, { e: Evidence; metric: MetricKey; n: number }[]>();
 
   for (const e of evidence) {
-    if (!e.metric) continue;
+    const n = numericValue(e.value);
+    if (!e.metric || n === undefined) continue;
     const key = metricKeyId(e.metric);
     const group = groups.get(key) ?? [];
-    group.push(e);
+    group.push({ e, metric: e.metric, n });
     groups.set(key, group);
   }
 
   const conflicts: Conflict[] = [];
 
   for (const group of groups.values()) {
-    if (group.length < 2) continue;
-
     for (let i = 0; i < group.length; i++) {
       for (let j = i + 1; j < group.length; j++) {
         const a = group[i]!;
         const b = group[j]!;
-
-        if (typeof a.value === 'number' && typeof b.value === 'number') {
-          if (CONFLICTS[a.metric!.unit](a.value, b.value)) conflicts.push({ metric: a.metric!, a, b });
-          continue;
-        }
-
-        // A document quoting a qualitative claim (channel notes, a stated ranking)
-        // against a computed number under the SAME metric key is exactly the
-        // "the notes say strongest, the numbers disagree" case (P5.6, Scenario
-        // Paid Social): there is no tolerance to apply to a claim with no number
-        // in it, but the pairing itself is the thing rule 10 needs to see, so it
-        // is surfaced as a Conflict rather than silently skipped like an
-        // unrelated prose claim (which never shares a metric key at all).
-        const oneNumericOneQualitative =
-          (typeof a.value === 'number' && typeof b.value === 'string' && b.value.length > 0) ||
-          (typeof b.value === 'number' && typeof a.value === 'string' && a.value.length > 0);
-        if (oneNumericOneQualitative) conflicts.push({ metric: a.metric!, a, b });
+        if (disagree(a.metric, a.n, b.n)) conflicts.push({ metric: a.metric, a: a.e, b: b.e });
       }
     }
   }

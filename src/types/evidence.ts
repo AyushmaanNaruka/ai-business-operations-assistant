@@ -4,7 +4,7 @@ export type EvidenceKind = 'computed' | 'document' | 'web';
 
 /** Normalised key that makes two evidence entries comparable, and so enables conflict detection. */
 export type MetricKey = {
-  name: string; // normalised: "conversion_rate"
+  name: string; // normalised: "conversion_rate"; "<metric>_rank" (unit count) holds a position, 1 = best
   scope: string; // normalised: "channel=email"
   unit: 'ratio' | 'currency' | 'count' | 'duration';
 };

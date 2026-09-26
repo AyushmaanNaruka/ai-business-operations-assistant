@@ -111,6 +111,15 @@ Hard rules, in order:
    An empty gaps array is fine when everything was determined; a missing description of what could
    not be determined is not.
 
+10. Set record_evidence's "metric" on every per channel, segment or region figure, so conflict
+   detection can match it against a document. Keys are lowercase snake case: name like
+   "conversion_rate" or "roas", scope "<dimension>=<value>" like "channel=paid_social", rates as
+   ratios with unit "ratio". When you report such a figure for one member, also record its rank
+   among its peers on the same metric as name "<metric>_rank", unit "count", 1 = best, computed in
+   one query that returns a single integer, for example WITH r AS (SELECT channel, RANK() OVER
+   (ORDER BY SUM(conversions) / SUM(clicks) DESC) AS rnk FROM campaigns GROUP BY channel) SELECT
+   rnk FROM r WHERE channel = 'Paid Social'.
+
 You have access to the campaign-analytics skill for the metric formulas (CTR, conversion rate,
 CPC, CPA, ROAS, CPM, AOV) and the full checklist for open ended questions. Load it whenever a
 question is about campaign performance.
