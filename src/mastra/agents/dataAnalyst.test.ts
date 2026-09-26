@@ -95,7 +95,7 @@ describe('dataAnalyst instructions: the evidence-conditioned-query hard rule exi
 describe('delegate(dataAnalyst, task): knownFacts plumbing, evidence present', () => {
   it('serialises the knownFacts evidence claim into the prompt sent to the model', async () => {
     const generateSpy = vi.spyOn(dataAnalyst, 'generate').mockResolvedValue({
-      object: wellFormedResult(),
+      steps: [{ text: JSON.stringify(wellFormedResult()), toolResults: [] }],
     } as never);
 
     const task = buildTask(
@@ -132,7 +132,7 @@ describe('delegate(dataAnalyst, task): knownFacts plumbing, evidence present', (
 describe('delegate(dataAnalyst, task): knownFacts plumbing, no relevant evidence', () => {
   it('produces a prompt with no scoping/constraint instruction when knownFacts is empty (the unscoped-query half of the bar)', async () => {
     const generateSpy = vi.spyOn(dataAnalyst, 'generate').mockResolvedValue({
-      object: wellFormedResult(),
+      steps: [{ text: JSON.stringify(wellFormedResult()), toolResults: [] }],
     } as never);
 
     const task = buildTask(
@@ -183,12 +183,10 @@ describe('delegate(dataAnalyst, task): a correctly-scoped SQL answer survives va
 
     const agent = fakeAgent(() =>
       Promise.resolve({
-        object: {
-          answer: "Scoped to Mid-Market / North America, the stated target audience [E12]: conversion rate is 5.1% [E13].",
-          evidence: [scopedEvidence],
-          gaps: [],
-          failures: [],
-        },
+        steps: [
+          { toolResults: [{ payload: { toolName: 'record_evidence', result: { ok: true, data: { evidence: scopedEvidence } } } }] },
+          { text: 'Scoped to Mid-Market / North America, the stated target audience [E12]: conversion rate is 5.1% [E13].', toolResults: [] },
+        ],
       }),
     );
 
@@ -199,7 +197,7 @@ describe('delegate(dataAnalyst, task): a correctly-scoped SQL answer survives va
       'a grounded, evidence-cited answer computed from the relevant tables',
     );
 
-    const result = await delegate(agent, task);
+    const result = await delegate(agent, task, { extractGaps: async () => [] });
 
     expect(result.evidence).toHaveLength(1);
     expect(result.evidence[0]!.method).toContain("segment = 'Mid-Market'");

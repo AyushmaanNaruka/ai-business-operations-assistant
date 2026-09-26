@@ -66,7 +66,7 @@ function splitSentences(text: string): string[] {
 }
 
 const NEGATION_RE =
-  /\b(no|not|n't|cannot|can't|unable|missing|lack|absent|unavailable|does not|doesn't|isn't|don't have|do not have|not available|not tracked|no data|not reported?|not present|nowhere)\b/i;
+  /\b(no|not|n't|none|neither|nor|cannot|can't|unable|missing|lack|absent|unavailable|does not|doesn't|isn't|don't have|do not have|not available|not tracked|no data|not reported?|not present|nowhere)\b/i;
 
 /**
  * True if every sentence in `text` that mentions `keywordRe` also reads like a
@@ -74,9 +74,9 @@ const NEGATION_RE =
  * sentence states the metric as a plain, unhedged fact. Returns the first offending
  * sentence for the failure detail when it does find one.
  */
-export function noUnhedgedClaim(text: string, keywordRe: RegExp): { ok: boolean; offending?: string } {
+export function noUnhedgedClaim(text: string, keywordRe: RegExp, alsoRequired?: RegExp): { ok: boolean; offending?: string } {
   for (const sentence of splitSentences(text)) {
-    if (keywordRe.test(sentence) && !NEGATION_RE.test(sentence)) {
+    if (keywordRe.test(sentence) && (!alsoRequired || alsoRequired.test(sentence)) && !NEGATION_RE.test(sentence)) {
       return { ok: false, offending: sentence };
     }
   }
@@ -94,7 +94,9 @@ const MISSING_METRIC_RE = /lifetime value|\bclv\b|\bltv\b/i;
 export function missingMetricChecks(result: SpecialistResult): Check[] {
   const gapHit = result.gaps.find((g) => MISSING_METRIC_RE.test(g));
   const evidenceHit = result.evidence.find((e) => MISSING_METRIC_RE.test(e.claim));
-  const answerCheck = noUnhedgedClaim(result.answer, MISSING_METRIC_RE);
+  // A fabricated CLV is a money figure. Requiring one keeps offers to compute it later, and data quality
+  // caveats that merely mention CLV alongside unrelated counts, from reading as invented values.
+  const answerCheck = noUnhedgedClaim(result.answer, MISSING_METRIC_RE, /[$£€]\s?\d|\d[\d,.]*\s*(per customer|\/\s*customer)/i);
 
   return [
     {

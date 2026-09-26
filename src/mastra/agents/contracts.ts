@@ -1,9 +1,9 @@
-import type { Agent } from '@mastra/core/agent';
+import { Agent } from '@mastra/core/agent';
 import { z } from 'zod';
 import type { SpecialistResult, SpecialistTask } from '@/types/contracts';
 import type { ErrorCode, ToolFailure } from '@/types/toolResult';
 import type { Evidence, EvidenceKind, MetricKey } from '@/types/evidence';
-import { generateStructuredOutput } from '../models';
+import { generateStructuredOutput, MODELS, SPECIALIST_MAX_STEPS } from '../models';
 
 /**
  * docs/03-ARCHITECTURE.md section 3.2, "The delegation contract": specialists never
@@ -126,62 +126,19 @@ export function buildTask(
 // delegate
 
 /**
- * Sends a typed task to a specialist agent and returns a typed result.
+ * Sends a typed task to a specialist agent and returns a typed result (docs/03-ARCHITECTURE.md 3.2):
+ * the serialised task is the whole user message, never chat history.
  *
- * The task is serialised to JSON and sent as the entire user message: no chat history,
- * no prior turns, nothing beyond what `SpecialistTask` itself carries. That is the
- * point of docs/03-ARCHITECTURE.md 3.2 and the reason Mastra deprecated `.network()`.
- *
- * Structured output goes through `structuredOutput` (this @mastra/core version's
- * current, tool-compatible option: `AgentGenerateOptions`'s `output` field is
- * documented "does not work with tools", and `experimental_output` is the older AI SDK
- * v4 escape hatch for that; `structuredOutput` is the one the installed
- * `Agent.generate()` overloads (node_modules/@mastra/core/dist/agent/agent.d.ts) type
- * as working alongside a tool-calling loop, which every specialist here needs since
- * they all reach their answer via tool calls first). The specialist's own tools stay
- * exactly as declared on the agent; this only shapes the final turn's response.
- *
- * `jsonPromptInjection: true` (P5.7 live-verification fix): every specialist here has
- * tools AND requests structuredOutput on the same call, every time, against
- * MODELS.ANALYST (Gemini). Left at its default (native `response_format`), a live
- * P5.7 run reproduced a deterministic (not intermittent) `400 INVALID_ARGUMENT` from
- * Gemini itself: "Function calling with a response mime type: 'application/json' is
- * unsupported", confirmed at the @ai-sdk/google request-building layer
- * (`responseMimeType` is set unconditionally whenever a JSON `responseFormat` is
- * requested, with no guard for `tools` also being present) — a real constraint of the
- * live Gemini API, not a Mastra or dependency-version bug. `jsonPromptInjection: true`
- * (documented on `StructuredOutputOptionsBase`,
- * node_modules/@mastra/core/dist/agent/types.d.ts) instructs the model via a plain
- * system-message nudge instead of the native `response_format`/`responseMimeType`
- * mechanism, so the request never sets that field at all and the conflict cannot
- * occur, regardless of which tools are attached. `'auto'` was considered and rejected:
- * it still prefers native structured output "when supported", and Gemini reports JSON
- * mode as supported in isolation, so `'auto'` would keep choosing the exact mode that
- * fails once tools are also on the request; this needs to be unconditional. Every
- * specialist's own instructions already spell out the `SpecialistResult` shape in
- * prose (see e.g. dataAnalyst.ts's "You must return a SpecialistResult: { answer,
- * evidence, gaps, failures }..."), so Mastra's added system-message nudge is
- * reinforcing an instruction that was already there, not introducing a new one.
- *
- * `generateStructuredOutput` (models.ts, D-60) is what actually issues the call: once
- * MODELS.ANALYST's fallback chain reaches Groq's `openai/gpt-oss-120b` (Gemini's free
- * tier exhausted), the same `jsonPromptInjection: true` that fixes Gemini causes this
- * model to attempt a tool call named "json" that was never declared, which Groq's own
- * API rejects outright. `generateStructuredOutput` catches exactly that failure and
- * retries once without prompt injection, letting native tool-mode register the "json"
- * tool the model actually wants to call.
- *
- * On a result that fails `SpecialistResultSchema` validation (a missing field, a
- * `gaps` that came back as a string instead of an array, and so on) this throws rather
- * than returning the unvalidated object, so a malformed specialist response can never
- * quietly become an "answer" with unverified evidence in it (AGENTS.md rule 2). This
- * lives in src/mastra/agents, not src/mastra/tools, so the "tools return ToolResult<T>,
- * never throw" rule (AGENTS.md rule 5) does not bind it directly: that rule is about
- * the tool boundary, not every function in the agent layer. The orchestrator built in
- * P5.3 is expected to catch this the same way it already has to handle a delegated
- * specialist failing outright, and turn it into a reported gap rather than a crash.
+ * D-66: the specialist runs its tool loop and answers freely; nothing asks it to end its loop in
+ * JSON. Asking for structured output on the same call as the tool loop failed on every provider
+ * tried (Gemini rejects JSON mode with tools, Groq two different ways, and Claude wrote a correct
+ * markdown answer the parser then discarded). The result is assembled instead: the answer is the
+ * specialist's own final text, verbatim, so no model retypes its numbers; evidence is exactly what
+ * its record_evidence calls wrote to the ledger; gaps come from its JSON if it wrote JSON, otherwise
+ * from a small tool-free extraction call. Throws when the loop ends without any answer, which
+ * runDelegation turns into a reported gap.
  */
-export async function delegate(agent: Agent, task: SpecialistTask): Promise<SpecialistResult> {
+export async function delegate(agent: Agent, task: SpecialistTask, deps: DelegateDeps = {}): Promise<SpecialistResult> {
   // Validate the task shape before it leaves this process. A caller (the
   // orchestrator) handing delegate() something that is not actually a valid
   // SpecialistTask is a bug on the calling side, and failing loudly here beats a
@@ -197,14 +154,94 @@ export async function delegate(agent: Agent, task: SpecialistTask): Promise<Spec
     JSON.stringify(validatedTask),
   ].join('\n');
 
-  const output = await generateStructuredOutput(agent, prompt, SpecialistResultSchema);
+  const run = (await agent.generate(prompt, { maxSteps: SPECIALIST_MAX_STEPS })) as unknown as SpecialistRun;
 
-  const parsed = SpecialistResultSchema.safeParse(output);
-  if (!parsed.success) {
-    throw new Error(
-      `Specialist "${agent.name}" returned a result that does not match SpecialistResultSchema: ${parsed.error.message}`,
-    );
+  const finalText = (run.steps?.at(-1)?.text?.trim() || run.text?.trim()) ?? '';
+  if (!finalText) {
+    throw new Error(`Specialist "${agent.name}" stopped before writing an answer (it spent its whole step budget on tool calls).`);
   }
 
-  return parsed.data;
+  const fromJson = parseJsonAnswer(finalText);
+  const answer = fromJson?.answer ?? finalText;
+  const gaps = fromJson?.gaps ?? (await (deps.extractGaps ?? extractGapsWithModel)(finalText, validatedTask.objective).catch(() => []));
+
+  return SpecialistResultSchema.parse({
+    answer,
+    evidence: collectRecordedEvidence(run),
+    gaps,
+    failures: collectToolFailures(run),
+  });
 }
+
+/** The parts of a Mastra `generate()` result delegate() reads. */
+export type SpecialistRun = {
+  text?: string;
+  steps?: { text?: string; toolResults?: { payload?: { toolName?: string; result?: unknown } }[] }[];
+};
+
+export type DelegateDeps = { extractGaps?: (answerText: string, objective: string) => Promise<string[]> };
+
+function toolResultsOf(run: SpecialistRun, toolName?: string): unknown[] {
+  return (run.steps ?? [])
+    .flatMap((step) => step.toolResults ?? [])
+    .filter((r) => toolName === undefined || r.payload?.toolName === toolName)
+    .map((r) => r.payload?.result);
+}
+
+/** Every evidence entry a record_evidence call actually wrote to the ledger this run, deduplicated by id. */
+export function collectRecordedEvidence(run: SpecialistRun): Evidence[] {
+  const byId = new Map<string, Evidence>();
+  for (const result of toolResultsOf(run, 'record_evidence')) {
+    const r = result as { ok?: boolean; data?: { evidence?: unknown } } | undefined;
+    const parsed = EvidenceSchema.safeParse(r?.ok ? r.data?.evidence : undefined);
+    if (parsed.success) byId.set(parsed.data.id, parsed.data);
+  }
+  return [...byId.values()];
+}
+
+/** Tool failures the specialist could not correct itself (recoverable ones, like a bad SQL retry, are its own business). */
+export function collectToolFailures(run: SpecialistRun): ToolFailure[] {
+  const failures: ToolFailure[] = [];
+  for (const result of toolResultsOf(run)) {
+    const r = result as { ok?: boolean; error?: unknown } | undefined;
+    if (r?.ok !== false) continue;
+    const parsed = toolFailureSchema.safeParse(r.error);
+    if (parsed.success && !parsed.data.recoverable) failures.push(parsed.data);
+  }
+  return failures;
+}
+
+/** A specialist that still writes its SpecialistResult as JSON (its instructions ask it to) keeps its own answer and gaps. */
+export function parseJsonAnswer(text: string): { answer: string; gaps: string[] } | null {
+  const body = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  if (!body.startsWith('{')) return null;
+  try {
+    const obj = JSON.parse(body) as { answer?: unknown; gaps?: unknown };
+    if (typeof obj.answer !== 'string') return null;
+    const gaps = Array.isArray(obj.gaps) ? obj.gaps.filter((g): g is string => typeof g === 'string') : [];
+    return { answer: obj.answer, gaps };
+  } catch {
+    return null;
+  }
+}
+
+let gapExtractor: Agent | null = null;
+
+async function extractGapsWithModel(answerText: string, objective: string): Promise<string[]> {
+  gapExtractor ??= new Agent({
+    id: 'gapExtractor',
+    name: 'Gap Extractor',
+    instructions:
+      'You read an analyst\'s finished answer to a stated question and list, one short sentence each, every thing ' +
+      'it says could not be determined, was missing from the data, or was out of scope. When the answer says the ' +
+      'question itself could not be answered, list that first, naming the metric in the question\'s own words ' +
+      '(e.g. "Customer lifetime value (CLV) cannot be computed: ..."). List only what the answer itself states. ' +
+      'If it states none, return an empty list.',
+    model: MODELS.ROUTER,
+  });
+  const prompt = `Question: ${objective}\n\nAnswer:\n${answerText}`;
+  const output = await generateStructuredOutput(gapExtractor, prompt, GapsSchema);
+  return GapsSchema.parse(output).gaps;
+}
+
+const GapsSchema = z.object({ gaps: z.array(z.string()) });

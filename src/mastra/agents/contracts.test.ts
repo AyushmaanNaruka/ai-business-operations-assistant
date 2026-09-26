@@ -48,60 +48,77 @@ describe('buildTask', () => {
   });
 });
 
-describe('delegate', () => {
-  it('resolves with the validated SpecialistResult when the agent returns a well formed object', async () => {
-    const wellFormed = {
-      answer: 'Email is the most efficient channel at a 4.2% conversion rate [E1].',
-      evidence: [sampleEvidence],
-      gaps: [],
-      failures: [],
-    };
-    const agent = fakeAgent(() => Promise.resolve({ object: wellFormed }));
+describe('delegate (D-66)', () => {
+  const task = buildTask('Identify the best channel', ['src_1'], [], 'one ranked finding');
+  const recorded = (evidence: unknown, ok = true) => ({ payload: { toolName: 'record_evidence', result: ok ? { ok: true, data: { evidence } } : { ok: false, error: { code: 'QUERY_INVALID', message: 'bad', recoverable: true } } } });
 
-    const task = buildTask('Identify the best channel', ['src_1'], [], 'one ranked finding');
-    const result = await delegate(agent, task);
+  it('keeps the prose answer verbatim, takes evidence from record_evidence results, and sends only the task', async () => {
+    const answer = 'Email is the most efficient channel at a 4.2% conversion rate [E1].';
+    const agent = fakeAgent(() =>
+      Promise.resolve({ steps: [{ text: 'Let me check.', toolResults: [recorded(sampleEvidence)] }, { text: answer, toolResults: [] }] }),
+    );
+    const extractGaps = vi.fn().mockResolvedValue(['No CLV column']);
 
-    expect(result).toEqual(wellFormed);
-    expect(agent.generate).toHaveBeenCalledTimes(1);
+    const result = await delegate(agent, task, { extractGaps });
 
-    // The task travels as the entire user message, serialised, with no chat history
-    // attached (docs/03-ARCHITECTURE.md 3.2): the prompt must carry the task's own
-    // fields and nothing that looks like prior conversation turns.
-    const [prompt] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(result).toEqual({ answer, evidence: [sampleEvidence], gaps: ['No CLV column'], failures: [] });
+    expect(extractGaps).toHaveBeenCalledWith(answer, 'Identify the best channel');
+    const [prompt, options] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[0] as [string, { maxSteps?: number; structuredOutput?: unknown }];
     expect(prompt).toContain('"objective":"Identify the best channel"');
     expect(prompt).toContain('"sourceIds":["src_1"]');
+    expect(options.maxSteps).toBeGreaterThan(5);
+    expect(options.structuredOutput).toBeUndefined();
   });
 
-  it('rejects a malformed result (gaps missing) instead of passing it through', async () => {
-    const malformed = {
-      answer: 'Some answer.',
-      evidence: [],
-      // gaps is missing entirely
-      failures: [],
-    };
-    const agent = fakeAgent(() => Promise.resolve({ object: malformed }));
+  it('uses the answer and gaps from a specialist that still writes JSON, without the extraction call', async () => {
+    const json = '```json\n{"answer":"No CLV in the data.","evidence":[],"gaps":["no customer level rows"],"failures":[]}\n```';
+    const agent = fakeAgent(() => Promise.resolve({ steps: [{ text: json, toolResults: [] }] }));
+    const extractGaps = vi.fn();
 
-    const task = buildTask('Identify the best channel', ['src_1'], [], 'one ranked finding');
-    await expect(delegate(agent, task)).rejects.toThrow(/SpecialistResultSchema/);
+    const result = await delegate(agent, task, { extractGaps });
+
+    expect(result.answer).toBe('No CLV in the data.');
+    expect(result.gaps).toEqual(['no customer level rows']);
+    expect(extractGaps).not.toHaveBeenCalled();
   });
 
-  it('rejects a malformed result (evidence has the wrong type) instead of passing it through', async () => {
-    const malformed = {
-      answer: 'Some answer.',
-      evidence: 'E1, E2', // should be Evidence[], not a string
-      gaps: [],
-      failures: [],
-    };
-    const agent = fakeAgent(() => Promise.resolve({ object: malformed }));
-
-    const task = buildTask('Identify the best channel', ['src_1'], [], 'one ranked finding');
-    await expect(delegate(agent, task)).rejects.toThrow(/SpecialistResultSchema/);
+  it('ignores failed or malformed record_evidence results and other tools, and dedupes by id', async () => {
+    const agent = fakeAgent(() =>
+      Promise.resolve({
+        steps: [
+          { toolResults: [recorded(sampleEvidence), recorded(sampleEvidence), recorded(null, false), recorded({ id: 'E2' })] },
+          { toolResults: [{ payload: { toolName: 'run_sql', result: { ok: true, data: { rows: [] } } } }] },
+          { text: 'Answer [E1].', toolResults: [] },
+        ],
+      }),
+    );
+    const result = await delegate(agent, task, { extractGaps: async () => [] });
+    expect(result.evidence).toEqual([sampleEvidence]);
   });
 
-  it('rejects when the agent returns no object at all', async () => {
-    const agent = fakeAgent(() => Promise.resolve({ object: undefined }));
-    const task = buildTask('Identify the best channel', ['src_1'], [], 'one ranked finding');
-    await expect(delegate(agent, task)).rejects.toThrow(/SpecialistResultSchema/);
+  it('reports non recoverable tool failures, not ones the specialist could correct', async () => {
+    const hard = { code: 'SEARCH_QUOTA', message: 'quota spent', recoverable: false };
+    const agent = fakeAgent(() =>
+      Promise.resolve({
+        steps: [
+          { toolResults: [recorded(null, false), { payload: { toolName: 'web_search', result: { ok: false, error: hard } } }] },
+          { text: 'Research is unavailable.', toolResults: [] },
+        ],
+      }),
+    );
+    const result = await delegate(agent, task, { extractGaps: async () => [] });
+    expect(result.failures).toEqual([hard]);
+  });
+
+  it('rejects when the loop ends without any answer text', async () => {
+    const agent = fakeAgent(() => Promise.resolve({ text: '', steps: [{ text: '', toolResults: [] }] }));
+    await expect(delegate(agent, task, { extractGaps: async () => [] })).rejects.toThrow(/stopped before writing an answer/);
+  });
+
+  it('still returns the answer, with no gaps, when gap extraction itself fails', async () => {
+    const agent = fakeAgent(() => Promise.resolve({ steps: [{ text: 'Answer.', toolResults: [] }] }));
+    const result = await delegate(agent, task, { extractGaps: () => Promise.reject(new Error('rate limited')) });
+    expect(result).toEqual({ answer: 'Answer.', evidence: [], gaps: [], failures: [] });
   });
 });
 
