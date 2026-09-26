@@ -61,6 +61,7 @@ describe('Grounding eval: contradiction', () => {
         'Grounding eval 3 (contradiction)',
       );
     },
-    90_000,
+    // Two specialists on the analyst tier, the Data Analyst also computing a rank (D-67).
+    180_000,
   );
 });

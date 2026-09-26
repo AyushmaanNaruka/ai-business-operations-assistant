@@ -40,8 +40,9 @@ function metricKeyId(metric: MetricKey): string {
   return `${normalise(metric.name)}::${normalise(metric.scope)}`;
 }
 
-// DuckDB hands some numeric types (DECIMAL, HUGEINT) back as digit strings.
-function numericValue(value: Evidence['value']): number | undefined {
+// DuckDB hands some numeric types (DECIMAL, HUGEINT) back as digit strings, and
+// models often pass a stated figure as "0.22" rather than 0.22.
+export function numericValue(value: Evidence['value']): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
   if (typeof value === 'string' && /^\s*-?\d+(\.\d+)?(e[+-]?\d+)?\s*$/i.test(value)) return Number(value);
   return undefined;

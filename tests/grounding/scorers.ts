@@ -210,18 +210,13 @@ export function contradictionChecks(output: ContradictionOutput): Check[] {
       pass: Boolean(conflictHit),
       detail: conflictHit
         ? `conflict: ${conflictHit.a.sourceName} (${conflictHit.a.value}) vs ${conflictHit.b.sourceName} (${conflictHit.b.value}) on metric ${conflictHit.metric.name}/${conflictHit.metric.scope}`
-        : 'detectConflicts([...dataResult.evidence, ...documentResult.evidence]) returned no match. GAP: ' +
-          "src/mastra/tools/documents.ts's record_evidence tool input schema has no \"metric\" field (unlike " +
-          "src/mastra/tools/analysis.ts's, which does), so a document-sourced claim can never carry the " +
-          'MetricKey {name, scope, unit} that detectConflicts (src/modules/evidence/conflicts.ts) matches on; ' +
-          "neither dataAnalyst.ts nor documentAgent.ts instructs the model to set one, either, even where the " +
-          "schema does support it. scripts/make-customer-notes.ts's own header comment says this exact planted " +
-          'contradiction ("Conflict detection (M5) has to catch this") is supposed to be caught by it — today it ' +
-          'structurally cannot be, for any document-sourced claim. Fix: add an optional metric field to ' +
-          "documents.ts's record_evidence input schema (thread it into ledger.addEvidence, which already accepts " +
-          "Evidence['metric']), and add a rule to documentAgent.ts (and dataAnalyst.ts) telling the model to set a " +
-          'normalised metric key whenever a claim describes a comparable, named quantity (a channel/segment/region ' +
-          "metric) — the same way orchestrator.ts's rule 10 already assumes one exists.",
+        : 'detectConflicts([...dataResult.evidence, ...documentResult.evidence]) returned no match. Both sides ' +
+          'must record the same numeric MetricKey (D-67: "conversion_rate_rank", scope "channel=paid_social"). ' +
+          `Keyed evidence was: ${JSON.stringify(
+            [...output.dataResult.evidence, ...output.documentResult.evidence]
+              .filter((e) => e.metric)
+              .map((e) => ({ metric: e.metric, value: e.value })),
+          )}`,
     },
   ];
 }

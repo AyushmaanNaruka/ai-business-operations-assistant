@@ -2,6 +2,7 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import type { ToolResult } from '@/types';
 import { getDocument, search } from '@/modules/documents';
+import { numericValue } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
 import { getRuntime } from '../runtime';
 
@@ -243,7 +244,9 @@ export const recordEvidenceTool = createTool({
     retrieved: boolean;
   }) =>
     safe(async () => {
-      if (inputData.metric && typeof inputData.value !== 'number') {
+      // A keyed figure is stored as a number; "0.22" or "1" would otherwise be refused below.
+      const value = inputData.metric ? (numericValue(inputData.value) ?? inputData.value) : inputData.value;
+      if (inputData.metric && typeof value !== 'number') {
         return fail(
           'UNSUPPORTED',
           '"metric" was set without a numeric "value", so conflict detection could never compare this claim.',
@@ -261,7 +264,7 @@ export const recordEvidenceTool = createTool({
         sourceId: inputData.sourceId,
         sourceName: inputData.sourceName,
         locator: inputData.locator,
-        ...(inputData.value !== undefined ? { value: inputData.value } : {}),
+        ...(value !== undefined ? { value } : {}),
         ...(inputData.metric ? { metric: inputData.metric } : {}),
         retrieved: inputData.retrieved,
       });

@@ -18,4 +18,21 @@ describe('record_evidence (documents)', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'UNSUPPORTED', recoverable: true } });
   });
+
+  it('accepts a keyed figure passed as a digit string and stores it as a number', async () => {
+    const result = await recordEvidenceTool.execute!(
+      {
+        claim: 'Growth team says Paid Social is the strongest performing channel',
+        sourceId: 'src_notes',
+        sourceName: 'customer-notes.docx',
+        locator: 'Jan 28',
+        value: '1',
+        metric: { name: 'conversion_rate_rank', scope: 'channel=paid_social', unit: 'count' },
+        retrieved: false,
+      },
+      {} as never,
+    );
+
+    expect(result).toMatchObject({ ok: true, data: { evidence: { value: 1 } } });
+  });
 });
