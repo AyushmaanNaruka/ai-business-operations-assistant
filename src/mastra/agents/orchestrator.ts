@@ -579,6 +579,20 @@ function expectFor(label: SpecialistLabel): string {
  * specialist result (contracts.ts), and that is caught here and turned into a
  * ToolResult failure instead of reaching the agent loop (AGENTS.md rule 5).
  */
+const RATE_LIMIT_SIGNATURE = /\b429\b|RESOURCE_EXHAUSTED|rate limit|quota|too many requests|request too large/i;
+
+/**
+ * True when a delegation failed because the providers are out of capacity, not because the
+ * specialist misbehaved (D-65). Checks the cause chain, since a model chain rethrows the last
+ * provider's error wrapped.
+ */
+export function isRateLimitError(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (RATE_LIMIT_SIGNATURE.test(e.message)) return true;
+  }
+  return false;
+}
+
 export async function runDelegation(
   specialist: SpecialistLabel,
   task: SpecialistTask,
@@ -592,6 +606,13 @@ export async function runDelegation(
     const result = await delegateFn(SPECIALIST_AGENTS[specialist], task);
     return { ok: true, data: result };
   } catch (err) {
+    if (isRateLimitError(err)) {
+      return fail(
+        'RATE_LIMIT',
+        'Every model provider is rate limited or out of quota right now, so this could not be answered.',
+        { recoverable: false, suggestion: 'Wait a minute and ask again. Do not retry within this turn.' },
+      );
+    }
     return fail(
       'PARSE_FAILED',
       `The ${specialist} specialist returned a result that could not be validated: ${(err as Error).message}`,
@@ -1282,6 +1303,10 @@ Ten hard rules, in order:
     the strongest channel but the campaign data computes a lower conversion rate for it, say both numbers, both
     sources, and that the computed figure from the spreadsheet is the more current one unless the notes carry a
     later retrieval date.
+
+11. If handle_request comes back with a RATE_LIMIT failure, every model provider is out of capacity. Do not call
+    handle_request again in this turn, and do not rephrase and retry: each attempt spends more of the same
+    quota. Tell the user plainly that the model providers are rate limited and to try again in a minute.
 
 Synthesis, not relay: after handle_request returns, do not paste a specialist's raw "answer" text into the
 chat. Read its evidence and gaps, decide what actually matters for the business question asked, order it by

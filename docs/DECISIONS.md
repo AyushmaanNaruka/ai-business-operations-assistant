@@ -467,3 +467,10 @@ Date, one line of context
 **Over:** Re-enabling external access around each registration (DuckDB refuses: "Cannot enable external access while database is running"), and parsing uploads in Node with exceljs or csv-parse into `registerRows`, which would replace DuckDB's type inference with a second, weaker one.
 **Because:** runtime.ts keeps one DuckDB session for the process, so D-13's accepted cost was far wider than it read: after any query, every later spreadsheet failed as QUERY_INVALID with a message about external file access, and every table inside a later PDF or Word upload was silently dropped, until a restart. The loader never sees model SQL and the session never reads a file, so no model written SQL can reach the filesystem or network, which is what D-13 exists for.
 **Cost:** Each upload holds the table in memory twice for the moment of the copy, and opens one extra short lived DuckDB instance. A second upload whose name maps to an existing table name still fails, as before.
+
+## D-65 A rate limited delegation is reported once, never retried within the turn
+27 Sep 2026, P8 dry run, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `runDelegation` recognises quota and rate limit errors (429, RESOURCE_EXHAUSTED, "rate limit", "quota", Groq's "request too large", checked down the error's cause chain) and returns `RATE_LIMIT` with `recoverable: false`, and orchestrator rule 11 says not to call handle_request again in that turn.
+**Over:** Reporting every delegation failure as a recoverable PARSE_FAILED that suggests asking again.
+**Because:** live, with every free tier spent, one question made four handle_request calls, each running a specialist loop against providers already refusing it, and the user waited 3.3 minutes for a rate limit banner. The "ask again" suggestion was being followed inside the same turn, turning an exhausted quota into more spend on the same quota.
+**Cost:** Detection is by message text; a provider that words its quota error differently falls back to PARSE_FAILED and the old retry behaviour.

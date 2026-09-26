@@ -10,7 +10,9 @@ import {
   decideAction,
   decideDelegationMode,
   gatherKnownFactsForData,
+  isRateLimitError,
   relevantEvidenceIds,
+  runDelegation,
   runTurn,
   type Intent,
 } from './orchestrator';
@@ -828,5 +830,32 @@ describe('buildFinding (D-63)', () => {
   it('returns null when none of the cited evidence exists in the ledger', () => {
     const result = { answer: 'A claim.', evidence: [ev('E9', 'high')], gaps: [], failures: [] };
     expect(buildFinding('document', 'x', result, [])).toBeNull();
+  });
+});
+
+describe('rate limited delegations (D-65)', () => {
+  const task: SpecialistTask = { objective: 'x', sourceIds: [], knownFacts: [], expect: 'y', constraints: [] };
+
+  it('recognises quota and rate limit errors, including one wrapped as a cause', () => {
+    expect(isRateLimitError(new Error('Quota exceeded for metric ... limit: 20, model: gemini-2.5-flash'))).toBe(true);
+    expect(isRateLimitError(new Error('Rate limit reached for model `openai/gpt-oss-120b`'))).toBe(true);
+    expect(isRateLimitError(new Error('wrapped', { cause: new Error('RESOURCE_EXHAUSTED') }))).toBe(true);
+    expect(isRateLimitError(new Error('does not match SpecialistResultSchema'))).toBe(false);
+  });
+
+  it('returns a non recoverable RATE_LIMIT failure, so the orchestrator is not invited to retry', async () => {
+    const delegateFn = vi.fn().mockRejectedValue(new Error('You exceeded your current quota'));
+    const result = await runDelegation('data', task, emptyManifest(), delegateFn);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('RATE_LIMIT');
+      expect(result.error.recoverable).toBe(false);
+    }
+  });
+
+  it('still reports a malformed result as PARSE_FAILED', async () => {
+    const delegateFn = vi.fn().mockRejectedValue(new Error('does not match SpecialistResultSchema'));
+    const result = await runDelegation('data', task, emptyManifest(), delegateFn);
+    expect(!result.ok && result.error.code).toBe('PARSE_FAILED');
   });
 });
