@@ -82,7 +82,7 @@ nothing.
 - [x] Zod schemas for each artifact type (P6.2: `src/modules/artifacts/schemas/*`, plus `validatePlan`'s schema-agnostic house-rule checker)
 - [x] `renderXlsx` with the five sheet convention and live formulas (P6.3)
 - [x] `renderPptx` with native charts and speaker notes (P6.4)
-- [x] Artifact workflow, eight steps, with validation and suspend on repeated failure (P6.6: six graph nodes per D-40's documented steps-4/5 merge and step-6 precheck simplification; suspend-after-two-attempts verified by test)
+- [x] Artifact workflow, seven steps, with validation and suspend on repeated failure (P6.6: seven graph nodes, per D-40's merge of author and validate into one step and the chart step as a precheck; suspend-after-two-attempts verified by test)
 - [x] Chart rendering via QuickChart (P6.5: `renderChart.ts`, used by `renderDocx`; `renderXlsx` embeds its own inline; `renderPdf` uses client-side Chart.js instead)
 - [x] Artifact versioning (P6.6: `src/modules/artifacts/store.ts`, a revision keeps every earlier version downloadable)
 - [x] `renderDocx` and `renderPdf` (P6.5: both built, not cut)

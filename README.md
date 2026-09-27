@@ -9,17 +9,19 @@ Built with TypeScript and Mastra.
     <img src="docs/media/demo-teaser.gif" alt="Demo: files are uploaded, a question is answered with visible SQL, a conflict between the notes and the data is surfaced, and an Excel workbook and client deck are generated" width="860">
   </a>
   <br>
-  <sub><b><a href="docs/media/demo.mp4">▶ Watch the full 80 second demo, with sound</a></b> · every number on screen is computed from the sample data</sub>
+  <sub><b><a href="docs/media/demo.mp4">▶ Watch the full 80 second demo, with sound</a></b> · an animated reconstruction of the UI, not a screen recording · every number on screen is computed from the sample data</sub>
 </p>
 
 ## Quick start
 
 ```bash
-npm install
-cp .env.example .env         # add your keys, see docs/10-SETUP.md
-npm run dev                  # Mastra Studio at localhost:4111
+npm install                  # root and app/ (an npm workspace)
+cp .env.example .env         # add at least one model key, see docs/10-SETUP.md
 cd app && npm run dev        # chat UI at localhost:3000
+npm run dev                  # optional, from the root: Mastra Studio at localhost:4111
 ```
+
+The chat UI runs the Mastra agents in its own server process, so it is all you need. Studio is a separate, optional process for inspecting agents, workflows and traces.
 
 Full setup, including free tier key sources: `docs/10-SETUP.md`
 
@@ -85,13 +87,13 @@ job, a different toolset and a different failure mode:
 | Data Analyst | Thinks in SQL and schemas, fails by writing bad queries | Agent |
 | Document Agent | Thinks in passages and citations, fails by missing context | Agent |
 | Research Agent | Thinks in queries and sources, fails on network and quota | Agent |
-| Artifact builder | Follows a fixed eight step sequence with one authoring step | Workflow, not an agent |
+| Artifact builder | Follows a fixed seven step sequence with one authoring step | Workflow, not an agent |
 | Ingestion | Fully deterministic, no judgment at all | Workflow, no model |
 
 **Why the artifact builder is a workflow, not a fifth agent.** Building a file is a
 known sequence with nothing to reason about: resolve the kind, gather evidence, load
-a skill, author a plan, validate it, render charts, render the file, store and link
-it. Only one of those eight steps calls a model. A workflow is cheaper, faster, unit
+a skill, author and validate a plan, check the charts, render the file, store and link
+it. Only one of those seven steps calls a model. A workflow is cheaper, faster, unit
 testable without a model, and cannot wander off mid task the way an agent can. The
 same argument applies to ingestion: detecting a file type and profiling a spreadsheet
 needs no judgment at all, so no model is involved anywhere in that path either.
@@ -102,7 +104,7 @@ campaign data and tell me what worked":
 ```
 1. Upload campaigns.xlsx
    -> ingestion workflow runs, no model involved
-   -> DuckDB registers it as table `campaigns`, profiled: 1,240 rows, 9 columns
+   -> DuckDB registers it as table `campaigns`, profiled: 1,203 rows, 11 columns
    -> a source card is written into the session manifest
 
 2. The question arrives
@@ -309,35 +311,37 @@ requested, so Excel guidance is not sitting in context during a "hello". The sch
 turns that guidance into a shape a model's output must satisfy. The renderer is
 plain, deterministic code that cannot invent a number.
 
-**The workflow has eight steps, and only one of them calls a model:**
+**The workflow has seven steps, and only one of them calls a model:**
 
 ```
-1. resolve kind        which artifact, from the request and any named format
-2. gather evidence     pull the relevant evidence entries from the ledger
-3. load skill          the matching SKILL.md, or generic-document as fallback
-4. author plan         THE ONLY MODEL STEP. Output shaped by the Zod schema
-5. validate            schema plus house rules the schema cannot express
-6. render charts       in parallel, only if the plan contains any
-7. render file          exceljs / pptxgenjs / docx / puppeteer
-8. store and link      write to generated/, register the artifact, return the link
+1. resolve kind          which artifact, from the request and any named format
+2. gather evidence       pull the relevant evidence entries from the ledger
+3. load skill            the matching SKILL.md, or generic-document as fallback
+4. author and validate   THE ONLY MODEL STEP. Output shaped by the Zod schema, then
+                         checked against house rules the schema cannot express
+5. check charts          in parallel, only if the plan contains any; fails fast
+6. render file           exceljs / pptxgenjs / docx / puppeteer
+7. store and link        write to generated/, register the artifact, return the link
 ```
 
-Steps 1, 2, 3, 5, 6, 7 and 8 are plain TypeScript, unit testable and incapable of
-inventing a number. That ratio, one model call out of eight steps, is the whole
-point: the model authors a typed plan, not prose, and code renders the file.
+Authoring and validation share one step because validation drives the retry loop
+(D-40). Steps 1, 2, 3, 5, 6 and 7 are plain TypeScript, unit testable and incapable
+of inventing a number, and the validation half of step 4 is too. That ratio, one
+model call out of seven steps, is the whole point: the model authors a typed plan,
+not prose, and code renders the file.
 
 **Validation enforces what a Zod schema alone cannot:** every numeric claim carries
 at least one evidence id, no section is empty or placeholder text, every referenced
 evidence id actually exists in the ledger, and any chart's data matches the evidence
-it cites. If validation fails, the specific errors go back into step 4 for another
-attempt; after two failed attempts the workflow suspends and asks the user rather
+it cites. If validation fails, the specific errors go back to the model within step 4 for
+another attempt; after two failed attempts the workflow suspends and asks the user rather
 than shipping a bad file.
 
 **Live formulas in the Excel output** are the clearest proof that a workbook was
 constructed rather than transcribed. The five sheet convention is Summary,
 Recommendations, Data, Calculations, Sources; the Calculations sheet holds real
-formulas referencing the Data sheet, for example `=SUM(Data!H2:H1241)/SUM(Data!G2:G1241)`,
-never a pasted `0.042`. The Recommendations sheet has one row per finding with a
+formulas referencing the Data sheet, for example `=SUM(Data!J2:J1204)/SUM(Data!I2:I1204)`,
+never a pasted `0.040`. The Recommendations sheet has one row per finding with a
 cell range referencing the rows in Data that support it, so a reader can jump
 straight to the evidence.
 
@@ -362,13 +366,13 @@ from `docs/DECISIONS.md`.
 |---|---|---|---|
 | SQL over code execution | Every number comes from a DuckDB `SELECT` or `simple-statistics`, never from generated Python or JavaScript in a sandbox | Exotic analysis outside SQL and a fixed stats library (cohort modelling, custom simulations) is out of reach | The question space were genuinely unpredictable enough that no fixed toolset would cover it, and a sandbox's blast radius were worth accepting |
 | Context over retrieval | Full documents under about 25,000 tokens go straight into context; RAG only above that threshold | Two code paths to maintain instead of one, and a threshold that needs tuning against real files rather than a fixed rule | Documents were reliably large, so a single retrieval path would cover everything without the risk of missing a small file's one relevant sentence |
-| Deterministic workflows over agent autonomy | Artifact generation is an eight step workflow with one model call, not a fourth agent reasoning about how to build a file | Less adaptive to a genuinely novel artifact request, softened only by the `generic-document` fallback | Artifact requests were so open ended that no fixed sequence, however generic, would fit them |
+| Deterministic workflows over agent autonomy | Artifact generation is a seven step workflow with one model call, not a fourth specialist agent reasoning about how to build a file | Less adaptive to a genuinely novel artifact request, softened only by the `generic-document` fallback | Artifact requests were so open ended that no fixed sequence, however generic, would fit them |
 | Typed contracts over shared context | Specialists receive a `SpecialistTask` and return a `SpecialistResult`; they never see chat history | The orchestrator must be told explicitly when and how to delegate; there is no emergent LLM routed flexibility | Delegation patterns were unpredictable enough that manual routing rules could not keep up, which is exactly what `Agent.network()` tried and was deprecated for |
 | Free tier models over frontier models | Gemini Flash and Groq by default; a paid Anthropic or OpenAI key is optional, switched on by its presence | Daily quota ceilings (measured at 20 requests a day for Gemini 2.5 Flash's free tier on 26 Sep 2026), a fallback model that reasons more plainly on long synthesis turns, and answers that can differ in style within one conversation when a turn falls through to a different provider | A company were paying for the deployment, in which case adding one API key makes the paid provider primary with no code change |
 | Evidence ledger over prose citations | Every fact is a typed `Evidence` entry with an origin and a method, checked mechanically rather than trusted from a prompt | Every tool and every specialist has to construct evidence entries in code, which is real, repeated implementation work rather than one instruction | Model self citation were reliable enough to trust, which the project's own premise (rule 2, nothing enters an answer without an entry) says it is not |
 | Three layer artifact factory | A Skill, a Zod schema and a renderer are kept as three separate concerns instead of one prompt per artifact type | Three places to look when an artifact comes out wrong, instead of one | Artifact variety were small enough that one prompt per type stayed easy to reason about on its own |
 | File content is data, never instruction | A document's extracted requirements are surfaced to the user as a proposal, never auto executed | One extra confirmation step in a flow that could otherwise have run automatically, and a marginally less impressive live demo | Never, in this system: this is a security boundary against prompt injection from an uploaded file, not a convenience trade-off to relax later |
-| One shared session per process | A single in-memory DuckDB session, evidence ledger and manifest store stand in for true per-conversation isolation | Not multi tenant: every server process shares one database, and after a restart a reopened conversation's spreadsheets must be re-uploaded before they are queryable again | The goal were a production, multi user platform, which the brief explicitly says not to build |
+| One shared runtime per process, isolated at the tool boundary | A single in-memory DuckDB session, evidence ledger and manifest store, with every specialist tool scoped to the conversation's own sources: listings, reads, document search and even the tables a SQL query names are checked (D-72) | Isolation is enforced in code rather than by separate stores, so a new tool must apply the scope itself; after a restart a reopened conversation's spreadsheets must be re-uploaded; scaling past one process needs sticky sessions or a shared store | Tenants needed hard isolation guarantees (regulated data), which calls for a store per tenant |
 | Accepted two low severity audit advisories | `image-size` (via `pptxgenjs`) and `uuid` (via `exceljs`) are left as flagged rather than force-upgraded | A known, documented risk instead of downgrading two renderer dependencies to older, breaking versions | Either vulnerable path were reachable by user supplied input, which it is not in either case |
 
 **The one worth defending first in an interview** is context over retrieval. RAG is
@@ -391,6 +395,31 @@ replaced for.
 
 ---
 
+## Cost, speed and many users
+
+The first live run on Claude Sonnet 5 was measured from the app's own trace store,
+and the design was changed where the tokens were going. Nothing below removes
+information an answer depends on.
+
+- **Prompt caching on every agent.** Each step of an agent loop resends the prompt so far; the traces showed zero cached tokens and input at about 80% of the spend. Anthropic's automatic caching is now on for every agent (D-73), checked at the wire by `src/mastra/agents/promptCache.test.ts`. OpenAI and Gemini cache automatically.
+- **Smaller tool outputs.** `run_sql` shows the model at most 200 rows, `describe_dataset` a 5 row sample, and the analyst describes each table once per task rather than before every query. `compute_stats` runs the SQL itself instead of making the model write out every row, which was the slowest step in the first run (a t test re-emitted 433 rows as output).
+- **Shorter orchestrator prompts.** Earlier turns' tool results leave the prompt; what they established reaches the orchestrator every turn through the session manifest.
+- **Sonnet 5 by default,** not Opus 5, for the analyst and writer tiers: the live run met the grounding bar on Sonnet 5 at 40% of the price.
+- **Isolation between conversations.** One process serves every user, so every data and document tool is scoped to the conversation's own sources, including the tables a SQL query names, checked with DuckDB's own parser (D-72). Two users can each upload their own `campaigns.xlsx` (D-74).
+
+## Testing status
+
+| What | How | Result |
+|---|---|---|
+| Unit, integration and wire tests | `npm test`, no API key needed | 704 of 704 pass, including prompt caching on the wire and source scoping through a real Mastra agent run |
+| Scenario A (file led), live | Claude Sonnet 5 on a paid key, in the browser | Turns 1 to 5 answered with computed, cited numbers and a surfaced conflict. The bugs it found are fixed (D-68 to D-71). The key's $10 credit ran out during turn 6, before the cost changes above |
+| Scenario B (website only), live | Free tier Gemini and Groq, in the browser, after the changes above | End to end: a cited company profile where every claim carries its URL and read date, a summary document, and a five slide deck with speaker notes and a native chart. Two bugs found on the way are fixed (D-75) |
+| Scenario A on the free tier | Free tier Gemini and Groq | Not completable: a data question needs more requests than the free quotas allow (Gemini 2.5 Flash 20 a day, Gemini 3.5 Flash Lite 15 a day, Groq 8,000 tokens a minute) |
+
+**A full live run of Scenario A needs a paid key.** Set `ANTHROPIC_API_KEY` (or
+`OPENAI_API_KEY`) in `.env` and leave `MODEL_ANALYST` and `MODEL_WRITER` empty to use
+the defaults above; see `docs/10-SETUP.md`.
+
 ## Requirement coverage
 
 The full matrix, cross checked against the brief three times, is
@@ -405,7 +434,7 @@ The full matrix, cross checked against the brief three times, is
 | R3 | Multi agent where appropriate | Orchestrator plus three specialists, two levels, typed contracts. Artifact builder deliberately a workflow | Yes |
 | R4 | Conversational | Session manifest plus Mastra Memory (M8) | Yes |
 | R5 | Programmatic calculation | DuckDB plus simple-statistics (M2) | Yes |
-| R6 | No fabrication | Evidence ledger, `gaps` field, four grounding evals | Yes |
+| R6 | No fabrication | Evidence ledger, `gaps` field, four grounding evals | Partial: the ledger and `gaps` are enforced and tested; the live evals need keys and can fail on free tier quota |
 | R7 | Traceability | Findings to evidence to SQL or page or URL | Yes |
 
 **The twelve engineering expectations**
@@ -429,6 +458,7 @@ The full matrix, cross checked against the brief three times, is
 | Extra | Security for a shared deployment | SSRF guard, validated routes, rate limits, optional password gate, security headers | Yes |
 | Extra | Conversation history and file preview | Sidebar over Mastra Memory, Claude style preview panel | Yes |
 
+<!-- ARTIFACTS: regenerate before submit -->
 ## Generated artifacts
 
 Both produced from scenario A in `docs/08-DEMO-SCENARIOS.md`, and committed to
@@ -444,11 +474,13 @@ Both produced from scenario A in `docs/08-DEMO-SCENARIOS.md`, and committed to
 
 ## Demo
 
+**The video is an animated reconstruction, not a screen recording of the live app.** It redraws the chat UI in Remotion from the app's own layout, with every figure computed from `samples/campaigns.xlsx` (D-59). A recording was not used because free tier rate limits made live answers unreliable on cue. To see the real app, follow Quick start and run scenario A yourself.
+
 **[Watch the product video (MP4, 80 seconds, with sound)](docs/media/demo.mp4)**
 
 [![Demo video poster](docs/media/demo-poster.png)](docs/media/demo.mp4)
 
-It follows scenario A from `docs/08-DEMO-SCENARIOS.md`: four Northwind files are uploaded, a campaign question is answered with the SQL visible and the data problems flagged (duplicates, mixed date formats, missing revenue, a too small sample), the customer notes are caught contradicting the spreadsheet on Paid Social, and an Excel workbook and client deck are generated from the evidence. The video is built with Remotion from `docs/demo-video/` (D-59), its figures are computed from `samples/campaigns.xlsx`, and its soundtrack is synthesised in code, so it is free to share anywhere.
+It follows scenario A from `docs/08-DEMO-SCENARIOS.md`: four Northwind files are uploaded, a campaign question is answered with the SQL visible and the data problems flagged (duplicates, mixed date formats, missing revenue, a too small sample), the customer notes are caught contradicting the spreadsheet on Paid Social, and an Excel workbook and client deck are generated from the evidence. The video's source is `docs/demo-video/`, and its soundtrack is synthesised in code, so it carries no music licence. Remotion itself needs a company licence for organisations of more than three people (D-59).
 
 ## What is deliberately out of scope
 

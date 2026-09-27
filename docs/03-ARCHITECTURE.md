@@ -57,7 +57,7 @@ Abstract diagrams are easy to nod at. Here are three real requests traced end to
 1. User uploads campaigns.xlsx
    -> Ingestion workflow runs (no model involved)
    -> DuckDB registers it as table `campaigns`
-   -> Profile: 1,240 rows, 9 columns, date range Jan to Aug 2026
+   -> Profile: 1,203 rows, 11 columns, date range Dec 2024 to Jul 2026
    -> Source card written into the session manifest
 
 2. User asks the question
@@ -307,9 +307,9 @@ Three design points:
 
 ```
 src_3  campaigns.xlsx  tabular
-       1,240 rows, 9 columns, Jan to Aug 2026
-       columns: campaign, channel, segment, spend, impressions,
-                clicks, conversions, revenue, date
+       1,203 rows, 11 columns, Dec 2024 to Jul 2026
+       columns: campaign_name, channel, segment, region, start_date,
+                end_date, spend, impressions, clicks, conversions, revenue
 ```
 
 Those cards are what the orchestrator reads at the top of every turn. They are small enough to keep permanently in context and specific enough to route on.
@@ -617,7 +617,7 @@ Two layers, doing different things.
 
 ```
 SOURCES
-  src_1  campaigns.xlsx     tabular, 1,240 rows, ready
+  src_1  campaigns.xlsx     tabular, 1,203 rows, ready
   src_2  company-brief.pdf  document, full mode, 4,100 tokens, ready
   src_3  acme.com/about     web, full mode, read 22 Sep
 

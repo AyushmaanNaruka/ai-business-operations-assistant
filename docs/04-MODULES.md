@@ -204,11 +204,11 @@ gatherFor(topic: string): { findings: Finding[]; evidence: Evidence[] }
 | Zod schema (`schemas/`) | What shape it must be | A type |
 | Renderer (`renderers/`) | How it becomes a file | TypeScript |
 
-**Workflow, eight steps, one model call**
+**Workflow, seven steps, one model call**
 
 ```
-resolve kind -> gather evidence -> load skill -> AUTHOR PLAN (model)
- -> validate -> render charts -> render file -> store and link
+resolve kind -> gather evidence -> load skill -> AUTHOR PLAN (model) AND VALIDATE
+ -> check charts -> render file -> store and link
 ```
 
 **Validation enforces what the schema cannot**

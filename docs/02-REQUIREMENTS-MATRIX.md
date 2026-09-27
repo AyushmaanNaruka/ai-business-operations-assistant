@@ -33,7 +33,7 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 
 | Requirement | Where | Spec | Build |
 |---|---|---|---|
-| "Which campaigns performed best?" | `run_sql` after mandatory `describe_dataset` | Yes | [x] partial: the mechanism is built and unit tested end to end, but it runs behind Data Analyst delegation, and `delegate()` (see contracts.ts doc comment, D-60) documents that Groq's structured-output mode — the fallback once Gemini's free daily quota is exhausted — can still fail a `SpecialistResult` parse in two distinct shapes, only partially mitigated |
+| "Which campaigns performed best?" | `run_sql` after mandatory `describe_dataset` | Yes | [x] |
 | "Which segment has the highest conversion rate?" | Same, with the metric formula from the analytics skill | Yes | [x] |
 | "What trends do you see?" | `campaign-analytics` skill checklist plus `compute_stats` regression | Yes | [x] |
 | "What should we change in the next campaign?" | Recommendation intent, findings grounded in evidence | Yes | [x] |
@@ -51,14 +51,14 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 | Content brief | `content-brief` to docx | Yes | [x] |
 | Campaign plan | `campaign-plan` to docx | Yes | [x] |
 | **Other appropriate outputs** | `generic-document` fallback so nothing is refused for being unlisted | Yes | [x] |
-| Meaningful content, not a pasted reply | Typed plan validated by Zod, rendered by code. Only step 4 of 8 uses a model | Yes | [x] |
+| Meaningful content, not a pasted reply | Typed plan validated by Zod, rendered by code. Only step 4 of 7 (author and validate) uses a model | Yes | [x] |
 
 ## E. Research
 
 | Requirement | Where | Spec | Build |
 |---|---|---|---|
 | Research the public web | M4, Exa or Tavily, Jina Reader, Firecrawl | Yes | [x] |
-| Structured company profile | `company-research` skill defines the fields and the pages to look for | Yes | [x] partial: the skill, tool, and Research agent all exist and are tested, but the agent's answer reaches the orchestrator through the same `delegate()` structured-output call as Data Analyst, so it carries the same Groq-under-quota-pressure risk (contracts.ts doc comment, D-60) — degrades to a reported gap, not a crash, but a specialist delegation can genuinely fail |
+| Structured company profile | `company-research` skill defines the fields and the pages to look for | Yes | [x] Scenario B ran end to end live on free tier Gemini and Groq: a cited profile, every claim with its URL and read date (D-75) |
 | Combine research with user data | Evidence ledger holds both kinds, orchestrator synthesises | Yes | [x] |
 | Claims traceable to underlying information | Evidence locator: URL plus retrievedAt for web, page plus heading for documents, SQL for computed | Yes | [x] |
 
@@ -81,7 +81,7 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 | R3 | Multi agent where appropriate | Orchestrator plus three specialists, two levels, typed contracts. Artifact builder deliberately a workflow | Yes | [x] |
 | R4 | Conversational | M8 | Yes | [x] |
 | R5 | Programmatic calculation | M2 | Yes | [x] |
-| R6 | No fabrication | Evidence ledger, `gaps` field, four grounding evals | Yes | [x] partial: the evidence ledger and `gaps` field are built and unit tested (`npm test`, 488/488 green), and are the actual enforcement mechanism; the four grounding evals in `tests/grounding/` exist and are wired to `npm run eval`, but they require live model calls and real API keys, are not part of `npm test`, and tonight's runs were unreliable once Gemini's free daily quota (20 req/day) was exhausted — do not read this row as "the evals always pass," they depend on live quota being available |
+| R6 | No fabrication | Evidence ledger, `gaps` field, four grounding evals | Yes | [x] partial: the evidence ledger and `gaps` field are built and unit tested (`npm test`, 704/704 green), and are the actual enforcement mechanism. The four grounding evals in `tests/grounding/` make live model calls, run only through `npm run eval` and are not part of `npm test`. The missing metric and contradiction evals have passed live on Claude (D-66, D-67); on free tier keys any of them can fail for quota reasons, so do not read this row as "the evals always pass" |
 | R7 | Traceability | Findings to evidence to SQL or page or URL | Yes | [x] |
 
 ## H. The twelve engineering expectations
@@ -94,13 +94,13 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 | E4 | Numerical analysis | SQL only, analytics skill supplies method | Yes | [x] |
 | E5 | Multiple sources | Registry, evidence kinds, evidence conditioned queries | Yes | [x] |
 | E6 | Long running tasks | Workflow runs with IDs past about 20s, async ingestion, streamed progress, suspend and resume | Yes | [x] |
-| E7 | Errors and failed operations | `ToolResult<T>`, error codes, three retry classes, source status | Yes | [x] partial: `ToolResult<T>` (tools never throw), error codes, retry classes and source status are all built and tested at the tool layer; but one real failure mode still reaches the user as a specialist-level error rather than a typed tool failure — Groq's structured-output mode failing a `SpecialistResult` parse under Gemini-quota pressure (contracts.ts, D-60) — caught by the orchestrator and turned into a reported gap, not a crash, but it is a genuine, only-partially-mitigated failure path |
+| E7 | Errors and failed operations | `ToolResult<T>`, error codes, three retry classes, source status | Yes | [x] The Groq structured output parse failure that kept this partial (D-60, D-62) is gone: since D-66 `delegate()` runs the tool loop with no structured output and assembles the `SpecialistResult` in code. Rate limits and spend caps are reported once, in plain language (D-65, D-71) |
 | E8 | Unsupported requests | Capability list plus explicit refusal path | Yes | [x] |
-| E9 | Conflicting information | Normalised metric key, tolerance by unit, both sides surfaced | Yes | [x] partial: `detectConflicts` (src/modules/evidence/conflicts.ts) is built, unit tested, and wired into synthesis; the live-quality end of this — a genuinely disagreeing web fact and a spreadsheet fact both surfacing in one live conversation — is the same territory as the `contradiction` grounding eval, which depends on live quota (see R6) and was not reliably re-verified tonight |
+| E9 | Conflicting information | Normalised metric key, tolerance by unit, both sides surfaced | Yes | [x] `detectConflicts` is wired into synthesis, and ranking claims are compared as `_rank` metrics (D-67). The live contradiction eval passed on Claude, with the conflict found by `detectConflicts`, not by the model |
 | E10 | Generated artifacts | Skill plus schema plus renderer, versioned, evidence recorded | Yes | [x] |
 | E11 | Conversation context | Manifest plus Mastra Memory plus reference resolution | Yes | [x] |
 | E12 | Cost and latency | Model tiers, on demand skills, parse cache, row caps, parallel delegation | Yes | [x] |
-| Extra | File content is data, never instruction | Orchestrator rule 9. Not asked for, worth having | Yes | [ ] |
+| Extra | File content is data, never instruction | Orchestrator rule 9. Not asked for, worth having | Yes | [x] Orchestrator rule 9 (`src/mastra/agents/orchestrator.ts`); requirement shaped files and pages become `proposedTasks` at ingest, never actions (tested in `src/modules/sources/ingest.test.ts`) |
 | Extra | Provider choice | Anthropic, OpenAI, Gemini and Groq, switched on by their keys, paid first, with an allowlist (D-54) | Yes | [x] |
 | Extra | Security for a shared deployment | SSRF guard, validated routes, rate limits, optional password gate, security headers (docs/11-SECURITY.md, D-55 to D-58) | Yes | [x] |
 | Extra | Conversation history and file preview | Sidebar over Mastra Memory, Claude style preview panel (D-49, D-50) | Yes | [x] |
@@ -109,7 +109,7 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 
 | Deliverable | Where | Done |
 |---|---|---|
-| Working application | The repo, one setup command | [ ] partial: `tsc --noEmit` clean, `npm test -- --run` 488/488 green, and every phase's "Demonstrable" milestone through Saturday holds; but the build plan's own Sunday item "fresh clone test: does `10-SETUP.md` actually work from zero" has not been run yet, and quick start is two `npm run dev` commands (root Mastra + `app/`), not literally one |
+| Working application | The repo, one setup command | [ ] partial: `tsc --noEmit` clean, `npm test` 704/704 green, and every phase's "Demonstrable" milestone through Saturday holds; but the build plan's own Sunday item "fresh clone test: does `10-SETUP.md` actually work from zero" has not been run yet, and after `npm install` the chat UI is one command (`npm run dev --workspace app`; Mastra Studio is an optional second process) |
 | GitHub repository | Clean history, conventional commits | [ ] partial: history so far is clean and conventional (`feat:`, `fix:`, `docs:`); as of this audit there are uncommitted working-tree changes (this session's D-60/D-61 work and this matrix edit) still to be committed and pushed |
 | README: architecture | Section 1 of README.md | [x] real prose, not a placeholder (confirmed by reading it; README.md is 495 lines, rewritten tonight per the c48eeb1/1aab380 commits) |
 | README: key design decisions | Section 2, drawn from DECISIONS.md | [x] real prose, four decisions plus a "behind those four" paragraph, drawn from DECISIONS.md as specified |
@@ -124,10 +124,17 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 
 ## Known gaps
 
-None outstanding against the brief after three review passes. Everything in section 4 of the PRD is a deliberate scope exclusion, documented as a decision rather than left silent.
+No gap against the brief's requirements is left undesigned: everything in section 4 of the PRD is a deliberate scope exclusion, documented as a decision rather than left silent. What is still open is execution, listed here so it matches the partial and unticked rows above.
 
-The two risks that remain are execution risks, not design gaps:
+**Open**
 
-1. **Time.** The artifact renderers are the most likely thing to run late. If Saturday slips, ship Excel and PowerPoint only; that still satisfies "at least two generated business artifacts". *(Amended 27 Sep, P8.4 audit: resolved — both renderers, plus docx and pdf, shipped Friday; not cut.)*
-2. **Free tier limits.** Gemini and Exa quotas are finite: on 26 Sep 2026 the free tier for gemini-2.5-flash was measured at 20 requests a day. Cache aggressively, and do a full dry run of both demo scenarios on Sunday morning while there is still quota to recover from a mistake. The fallback chain (Gemini Flash, Flash Lite, Groq) softens this, and a paid Anthropic or OpenAI key removes it (D-53, D-54).
-3. **Amended 27 Sep, P8.4 audit — the fallback chain has its own edge, not just a quota ceiling.** Once Gemini's free tier is exhausted and `MODELS.ANALYST`'s chain reaches Groq, Groq's structured-output mode can fail a specialist's `SpecialistResult` parse in two distinct shapes (see `src/mastra/agents/contracts.ts`'s `delegate()` doc comment and D-60). One is retried automatically and recovers; the other is not fully solved, so a specialist delegation can genuinely fail under quota pressure. By design (contracts.ts) this degrades to an honest reported gap rather than a crash, but it is a real, currently open gap, not a resolved one. Relatedly, the four grounding evals in `tests/grounding/` require live model calls and real API keys, run only via `npm run eval` (not part of `npm test`), and tonight's runs were unreliable for the same quota reason — they should not be assumed to always pass; re-run them once quota resets, ideally with a paid key primary.
+1. **Generated artifacts not committed.** `samples/generated/` holds only its README; `northwind-q3-review.pptx` and `northwind-campaign-metrics.xlsx` still have to be produced from scenario A and committed (section I).
+2. **Fresh clone test not run.** `docs/10-SETUP.md` has been rewritten for a clean clone but not yet followed from zero on a second machine (section I, "Working application").
+3. **Uncommitted work.** The working tree carries changes not yet committed and pushed (section I, "GitHub repository").
+4. **Live grounding evals depend on quota.** The four evals in `tests/grounding/` make real model calls and run only through `npm run eval`, not `npm test`. The missing metric and contradiction evals have passed live on Claude (D-66, D-67); on the free tier they can fail for quota reasons, not grounding reasons (R6, E9).
+5. **Free tier limits.** On 26 Sep 2026 the free tier for gemini-2.5-flash was measured at 20 requests a day. The fallback chain (Gemini Flash, Flash Lite, Groq) softens this, and a paid Anthropic or OpenAI key removes it (D-53, D-54). A full scenario A run on free keys alone does not complete in one day.
+6. **Specialist gaps can be dropped on a failed extraction.** Since D-66 a specialist answers in free text and its `SpecialistResult` is assembled in code, which replaced the structured output path behind the Groq parse failures of D-60 and D-62. The remaining edge: if the small extraction call fails, the answer is returned with no `gaps`, so a gap can be stated in the answer text but missing from `openGaps`.
+
+**Resolved**
+
+- **Time.** The artifact renderers were the most likely thing to run late. Resolved on 27 Sep (P8.4 audit): xlsx, pptx, docx and pdf renderers all shipped; nothing was cut.

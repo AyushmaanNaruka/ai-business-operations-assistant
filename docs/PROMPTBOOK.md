@@ -40,8 +40,9 @@ Paste these into Claude Code or Antigravity. Both read `AGENTS.md` automatically
 
 Do this one by hand, not with an agent.
 
+From the repository root:
+
 ```bash
-cd D:\Projects\business-operations-assitant
 npm create mastra@latest .
 ```
 
@@ -941,8 +942,8 @@ five sheet convention: Summary, Recommendations, Data, Calculations, Sources.
 
 The rule that matters most: the Calculations sheet contains LIVE FORMULAS referencing
 the Data sheet, not computed values. Write
-  =SUM(Data!H2:H1241)/SUM(Data!G2:G1241)
-not 0.042.
+  =SUM(Data!J2:J1204)/SUM(Data!I2:I1204)
+not 0.040.
 
 The Recommendations sheet has one row per finding with a real range reference into
 Data in its supporting data column, so a reader can jump to the rows.

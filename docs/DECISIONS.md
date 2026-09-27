@@ -488,3 +488,87 @@ Date, one line of context
 **Over:** D-45 as it stood, a new `rank` unit on MetricKey, and a categorical "top channel" value compared by string equality.
 **Because:** the live contradiction eval showed D-45 never fired (the Data Analyst set no metric keys), and D-45 would fire even when the quote agreed with the number, so it paired rather than detected. "Strongest" states a position, so recording 1 invents nothing, and "rank 1 claimed, rank 6 computed" is a check code can make. A new unit would need `contracts.ts`'s mirrored enum changed or every rank entry fails validation at runtime; a categorical value cannot express "second best" and needs a "top of all channels" scope neither side naturally works in.
 **Cost:** A ranking claim that names no metric ("strongest performing") is keyed on conversion rate, stated in the claim text; a claim meant as ROAS rank will not match. Qualitative remarks with no position ("doing well") are no longer compared at all. The Data Analyst spends one more query per segment figure. The first live runs after the guard failed: models pass figures as digit strings ("1", "0.22"), the guard refused them, and the Document Agent spent its step budget resubmitting before dropping the key. `record_evidence` now coerces a digit string to a number when "metric" is set, with the same parser `detectConflicts` uses. The live contradiction eval then passed on Claude in 42s, with the conflict found by `detectConflicts`, not by the model.
+
+## D-68 A re-uploaded document is stored and indexed under its own id
+27 Sep 2026, Scenario A browser run, `src/modules/sources/ingest.ts`.
+**Chose:** On a content hash hit, ingest reads the earlier source's markdown and runs it through `finishDocumentIngestion` under the new id, which stores it, indexes it if routed indexed, and rebuilds the card. Only the parse and table extraction are reused.
+**Over:** Copying the earlier source's `doc` onto the new one, as before.
+**Because:** every read path (`get_document`, the RAG index) is keyed by source id, and `data/documents/<new id>.md` was never written. Any file uploaded again in a new chat failed as SOURCE_NOT_FOUND, and the Document Agent quietly read a copy belonging to a different conversation instead.
+**Cost:** A re-upload writes a second markdown file and, for an indexed document, embeds it again.
+
+## D-69 A comparison with a document runs the document leg first, then a scoped data leg
+27 Sep 2026, Scenario A browser run, `src/mastra/agents/orchestrator.ts`.
+**Chose:** When the request has comparison language ("compare", "against", "versus"), a document is in scope and a spreadsheet is loaded, `decideAction` delegates to document then data, adding the ready tabular sources to the scope, whether the classifier said document or mixed. `decideDelegationMode` treats such a request as sequential with document before data, so the document's evidence reaches the Data Analyst as knownFacts (D-35). The classifier prompt gains this case as a mixed example.
+**Over:** Leaving it to the classifier and to the orchestrator model's choice of source ids.
+**Because:** live, "Now compare that with the audience in the brief" was classified as document, scoped to the PDF only, and never reached the Data Analyst, so the brief's Mid-Market / NA audience never became a WHERE clause. The orchestrator then claimed the data had no Mid-Market segment; it has 400 rows of it.
+**Cost:** A comparison between two documents in a session that also holds a spreadsheet runs a data leg it did not need.
+
+## D-70 The artifact author's retry loop also covers output Mastra rejects against the schema
+27 Sep 2026, Scenario A browser run, `src/mastra/workflows/artifactSteps.ts`, `src/mastra/workflows/artifact.ts`, `src/modules/artifacts/validate.ts`, `src/modules/artifacts/renderers/renderXlsx.ts`, `src/mastra/tools/analysis.ts`.
+**Chose:** `authorPlanOnce` catches `STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED` and returns the rejected JSON, so `validatePlan` names the errors and the second attempt fixes them (D-40). The author is told evidenceIds hold E ids only. A workbook's author is given the Data sheet layout (column letters, row range), and `validatePlan` rejects a formula that references a sheet by column name. `record_evidence` records the owning source's id and name rather than the table name, and the live Data sheet lookup also accepts a registered table name for evidence saved before this change. A failed workflow's own error message now reaches the user.
+**Over:** Leaving Mastra's schema check to fail the step outright.
+**Because:** live, the deck failed with "workflow status: failed" and no reason: Claude cited F4 in slide evidenceIds, Mastra threw before the retry loop saw anything, and one stray id cost the whole deck. The workbook that did build had an empty Data sheet, because computed evidence carried "campaigns" as its sourceId and no source has that id, and its formulas read `=SUM(Data!revenue)`, which Excel opens as #NAME?.
+**Cost:** The layout adds a few hundred characters to the workbook prompt. The formula check only knows the five sheet names the renderer creates.
+
+## D-71 A provider's spend cap is reported as one, not as "something went wrong"
+27 Sep 2026, Scenario A browser run, `app/app/api/chat/route.ts`, `src/mastra/agents/orchestrator.ts`.
+**Chose:** The chat route's error handler names a usage or billing limit, and counts Groq's "request too large" and "tokens per minute" as rate limiting. D-65's signature also matches "usage limit" and "tokens per minute".
+**Over:** The generic "Something went wrong answering that".
+**Because:** Anthropic's spend cap arrives as an HTTP 400 `invalid_request_error` ("You have reached your specified API usage limits"), which matched none of the existing wording, and a large turn falling back to Groq fails on its TPM ceiling with a 413. Turn 6 of the run ended on the generic message while both were happening.
+**Cost:** Still matched by message text, like D-65.
+
+## D-72 Specialist tools read only the conversation's own sources
+27 Sep 2026, cost and scale pass, `src/mastra/tools/scope.ts`, `src/mastra/agents/contracts.ts`, `src/mastra/agents/orchestrator.ts`, `src/mastra/tools/analysis.ts`, `src/mastra/tools/documents.ts`, `src/modules/documents/rag.ts`, `src/modules/analysis/referencedTables.ts`.
+**Chose:** `delegate()` puts the task's source ids on the call's RequestContext, and `runDelegation` names the conversation's sources when a task is unscoped. Every data and document tool checks that scope: listings show only in-scope sources, reads of another source fail as SOURCE_NOT_FOUND, document search filters inside the vector query (`sourceId $in`), and SQL is checked against DuckDB's own parse (`json_serialize_sql`) so a query cannot name another conversation's table or the system catalogs. The Document Agent is told never to substitute a lookalike file. A call with no scope (Studio, tests) behaves as before.
+**Over:** A DuckDB session, registry and vector index per conversation.
+**Because:** one process serves every user, and the Scenario A run showed the Document Agent reading another conversation's copy of the brief (src_215) through `list_documents`. Scoping at the tool boundary closes that for data, documents and SQL without rebuilding the runtime, and keeps D-13's single locked DuckDB session.
+**Cost:** Isolation is enforced in code rather than by separate stores, so a new tool that reads sources must call `sourceScope` itself. Identical files still share one parsed table across conversations (content hash reuse), which is safe because the data is the same.
+
+## D-73 Prompt caching, smaller tool outputs, and Sonnet 5 by default
+27 Sep 2026, cost and scale pass, `src/mastra/models.ts`, every agent file, `src/mastra/tools/analysis.ts`, `src/mastra/agents/dataAnalyst.ts`.
+**Chose:** Every agent sends Anthropic's automatic prompt caching (`AGENT_DEFAULT_OPTIONS`, checked at the wire by `promptCache.test.ts`). The orchestrator drops earlier turns' tool calls from its prompt (`ToolCallFilter`; stored history is unchanged). `compute_stats` takes the SQL and reads the rows itself instead of the model writing them out; `run_sql` shows the model at most 200 rows; `describe_dataset` sends 5 sample rows, and the analyst describes each table once per task instead of before every query. The default analyst and writer model is Claude Sonnet 5, and Opus 5 is out of the default chains.
+**Over:** Leaving the loop as it was, or cutting steps and effort, which would cost answer quality.
+**Because:** measured from the trace store, the dry run's calls had zero cached tokens, input was about 80% of the spend, one data question took 8 to 12 steps with prompts growing to 55 to 65K tokens (the worst single analysis read 365K input tokens, about $0.93), a t test made the model re-emit 433 rows as output, and by turn six each orchestrator call carried 30 to 40K tokens of earlier tool results. The dry run itself ran on Sonnet 5 and met the grounding bar. None of these changes removes information the answer depends on: record_evidence still re-runs full queries, and findings reach the orchestrator through the manifest every turn.
+**Cost:** A model that genuinely needs more than 200 raw rows has to aggregate in SQL or use compute_stats. Cache writes cost 1.25x on the first step of each loop. Not yet measured live on Claude, because the key's credit ran out before this change.
+
+## D-74 A second, different file with a taken table name gets its own table
+27 Sep 2026, cost and scale pass, `src/modules/sources/ingest.ts`. Supersedes D-64's accepted cost.
+**Chose:** When a table name is already owned by a source, the new one is registered as `<name>_<n>` from its source id (`campaigns_12`, `northwind_brief_12_t1`); a registration that races into "already exists" retries once under that name. A free name is unchanged.
+**Over:** Failing the second upload, as D-64 accepted.
+**Because:** with many users, two different `campaigns.xlsx` files is the normal case, not an edge case.
+**Cost:** A file literally named like a fallback (`campaigns_12.csv`) can still collide and fail once with DuckDB's error.
+
+## D-75 A pasted URL starts research, and artifact ids are resolved in code
+27 Sep 2026, Scenario B free tier run, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `handle_request` moves any URL the model put in `sourceIds` into the objective (`moveUrlsIntoObjective`), and orchestrator rule 12 says a message that is only a website address is a request to profile that company. `request_artifact` resolves its ids in code (`resolveArtifactFindingIds`): finding ids are kept, an evidence id stands for every finding that cites it, and when nothing resolves every finding in the conversation is used.
+**Over:** Leaving both to the orchestrator model's reading of the tool descriptions.
+**Because:** live, turn 1 ("https://taplio.com/") came back "Source(s) not found" because the URL was passed as a source id, and after that was fixed the model asked what to do with the link. Turn 3 passed evidence ids as finding ids, the workflow gathered nothing, and the validator rightly refused a plan with no evidence behind it. With both fixes, Scenario B ran end to end on free models: a cited company profile, a summary document, and a five slide deck with notes and a native chart.
+**Cost:** A URL the user meant as something other than a research target is still researched. The history filter of D-73 edits earlier turns; on models that enforce preserved thinking on edited history (Claude Opus 5.5, Fable 5.1), that needs checking before switching the default away from Sonnet 5.
+
+## D-76 Research joins a combined request when the message asks for it
+27 Sep 2026, submission audit, `src/mastra/agents/orchestrator.ts`.
+**Chose:** `hasResearchCue(message)` (research, look up, the company website, competitors, a URL or a domain) adds the research specialist to a mixed request; `comparisonWithResearch` sends "compare it with the target company's audience" to research then data, or to data alone when an earlier research finding already covers the company. Independent asks stay parallel; research runs first only for a stated dependency or an audience comparison, and a sequential chain now carries every earlier leg's evidence forward. The live evals pass the sample files' real source ids.
+**Over:** Adding research only when a `web` source exists in the manifest, or always running research before data.
+**Because:** no web source exists until research has run, so "Research this company, analyze the campaign data I uploaded, and prepare a strategy based on both" silently dropped research. Research first by default would let a web claim about an audience become a WHERE clause and narrow an analysis the user asked for in full. Since D-72 an empty scope allows nothing, so evals that passed `[]` saw no tables.
+**Cost:** A cue word used loosely ("look up our Q3 numbers") adds a research leg that reports nothing relevant.
+
+## D-77 Ratio of sums is checked in code, and evidence values come from the result
+27 Sep 2026, submission audit, `src/modules/analysis/ratioLint.ts`, `computeStats.ts`, `evidenceValue.ts`, `src/mastra/tools/analysis.ts`.
+**Chose:** `run_sql` warns and `record_evidence` refuses SQL that averages a ratio (`AVG(a/b)`, or AVG over an alias defined as a division), unless the claim says it is an average of per-row values. `compute_stats` gains Welch's t test with df and p value and a pooled two proportion z test that sums successes and trials from the query rows. `record_evidence` records a cell of the result (the only cell, the `pick`ed one, or the one the typed value matches within 0.5%) and refuses otherwise; an empty result is a `NO_DATA` gap.
+**Over:** A prompt rule for ratios, a t statistic with no p value, and keeping the model's typed value when the result had more than one cell.
+**Because:** on the sample data the mean of per-row rates overstates conversion rate by about 26%, the segment rates sit within 0.23 points of each other so a winner needs a significance test, and a typed value with "high" confidence broke rule 1.
+**Cost:** The lint is pattern based: a ratio averaged through a view or a nested expression it does not parse can still get through.
+
+## D-78 Every sheet of a workbook is a table, and title rows are skipped
+27 Sep 2026, submission audit, `src/modules/sources/workbookSheets.ts`, `ingest.ts`, `src/modules/analysis/session.ts`, `detectType.ts`.
+**Chose:** Each non-empty xlsx sheet registers as its own DuckDB table on the one Source (`<base>` for the first sheet, `<base>__<sheet_slug>` for the rest), all listed on `Source.tables`. A sheet with title rows above its header is read from the detected header row with `read_xlsx(range=, header=true)`. exceljs, already a dependency, only locates the sheets and the header; DuckDB still reads every value. `.md` and `.markdown` are accepted as the `txt` kind.
+**Over:** Registering only the first sheet, or letting the model choose a sheet.
+**Because:** data on a second sheet was invisible to the analyst with no warning, and real exports often carry a title row. Putting every sheet on `Source.tables` keeps D-72 scoping unchanged, and a normal single sheet file runs byte identical SQL, so existing table names do not move.
+**Cost:** A title row with two filled cells is taken as the header. Hidden sheets are registered too.
+
+## D-79 The artifact workflow declines empty inputs, and code owns formulas, dates and sources
+27 Sep 2026, submission audit, `src/modules/artifacts/formulas.ts`, `validate.ts`, `documentPlan.ts`, `renderers/renderXlsx.ts`, `renderers/renderPptx.ts`, `src/mastra/workflows/artifactSteps.ts`.
+**Chose:** `checkArtifactReadiness` suspends at the start of `authorAndValidate`, before any model call, when there are no findings and no data rows, or when a workbook's Data rows come back empty, with the reason in the payload `request_artifact` already relays. Formula references are resolved by code (`resolveFormula`, shared by the validator and the renderer): `Data!<column>` becomes an exact A1 range and anything Excel would open as #NAME? or #REF! is rejected. The generated date, a closing Sources slide in decks, and de-duplicated citations are all produced by code. The placeholder check now catches template slots like `[Client Name]`, `XX%` and `TBC` without flagging citations like `[E12, E13]`. ROAS renders as a multiple, not a percent.
+**Over:** Shipping a workbook with an empty Data sheet and dropping its Calculations, or trusting the model's date and citations.
+**Because:** a submitted sample workbook had an empty Data sheet, `#NAME?` formulas, a model-written date from 2024 and ROAS shown as 3760%; a deck built with no evidence had "[Client Name]" in its notes. Declining before authoring also saves two model calls.
+**Cost:** A user asking for a workbook with no loaded table gets a refusal rather than a document; they have to load data or ask for a report instead.

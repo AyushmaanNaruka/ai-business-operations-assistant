@@ -106,7 +106,7 @@ tests/grounding/      the four no fabrication evals
 ## Things that will look wrong but are correct
 
 - **RAG exists but usually does not run.** Documents under about 25,000 tokens go into context whole. This is deliberate; see architecture Part 2.5 of the research doc and M3.
-- **The artifact builder is a workflow, not an agent.** Deliberate. Only one of its eight steps calls a model.
+- **The artifact builder is a workflow, not an agent.** Deliberate. Only one of its seven steps calls a model (author and validate share a step, D-40).
 - **The orchestrator has no domain tools.** Deliberate. If it can query DuckDB itself, delegation becomes decorative.
 - **Specialists never see chat history.** They receive a typed `SpecialistTask`. Deliberate, and the reason Mastra deprecated `.network()`.
 
