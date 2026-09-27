@@ -572,3 +572,10 @@ Date, one line of context
 **Over:** Shipping a workbook with an empty Data sheet and dropping its Calculations, or trusting the model's date and citations.
 **Because:** a submitted sample workbook had an empty Data sheet, `#NAME?` formulas, a model-written date from 2024 and ROAS shown as 3760%; a deck built with no evidence had "[Client Name]" in its notes. Declining before authoring also saves two model calls.
 **Cost:** A user asking for a workbook with no loaded table gets a refusal rather than a document; they have to load data or ask for a report instead.
+
+## D-80 rag.test.ts is mocked all the way down to the model router
+28 Sep 2026, fresh clone test, `src/modules/documents/rag.test.ts`.
+**Chose:** Mock `@mastra/core/llm`'s `ModelRouterEmbeddingModel` and `ModelRouterLanguageModel` alongside the existing `ai`/`@mastra/libsql`/`@mastra/rag` mocks.
+**Over:** Leaving the unit tests as they were.
+**Because:** a fresh clone with no `.env` failed all 7 non-live tests in this file. `ModelRouterEmbeddingModel`'s constructor resolves a provider client and validates its API key eagerly, so `new ModelRouterEmbeddingModel(EMBEDDING_MODEL_ID)` (rag.ts's `model:` argument) threw before the mocked `embedMany` ever ran, and `getRelevanceScorer()` did the same for `ModelRouterLanguageModel`. The dev machine's `.env` had hidden this for the whole project: a "unit" test that silently depends on a real key contradicts AGENTS.md's own rule that modules are testable without a model.
+**Cost:** none found; the two classes are now stubbed the same way the vector store and rerank client already were.

@@ -43,12 +43,24 @@ describe('index()', () => {
       };
     });
     vi.doMock('ai', () => ({ embedMany: embedManyMock }));
+    // ModelRouterEmbeddingModel's constructor resolves a provider client and
+    // validates its API key eagerly, before embedMany (mocked above) ever
+    // runs, so this module has to be mocked too: without it, `new
+    // ModelRouterEmbeddingModel(EMBEDDING_MODEL_ID)` (rag.ts's `model:`
+    // argument) throws on a machine with no provider key set, and every test
+    // in this file fails with a real "API key not found" error instead of
+    // exercising rag.ts's own chunking and metadata logic.
+    vi.doMock('@mastra/core/llm', async () => {
+      const actual = await vi.importActual<typeof import('@mastra/core/llm')>('@mastra/core/llm');
+      return { ...actual, ModelRouterEmbeddingModel: vi.fn().mockImplementation(function ModelRouterEmbeddingModelMock() {}) };
+    });
     vi.resetModules();
   });
 
   afterEach(() => {
     vi.doUnmock('@mastra/libsql');
     vi.doUnmock('ai');
+    vi.doUnmock('@mastra/core/llm');
     vi.resetModules();
   });
 
@@ -186,12 +198,26 @@ describe('search()', () => {
         rerankWithScorer: rerankMock,
       };
     });
+    // Same reason as the index() block above: getQueryTool() and
+    // getRelevanceScorer() build a `new ModelRouterEmbeddingModel(...)` /
+    // `new ModelRouterLanguageModel(...)` argument before passing it to the
+    // mocked createVectorQueryTool/rerankWithScorer, and that construction
+    // throws with no provider key set unless this is mocked too.
+    vi.doMock('@mastra/core/llm', async () => {
+      const actual = await vi.importActual<typeof import('@mastra/core/llm')>('@mastra/core/llm');
+      return {
+        ...actual,
+        ModelRouterEmbeddingModel: vi.fn().mockImplementation(function ModelRouterEmbeddingModelMock() {}),
+        ModelRouterLanguageModel: vi.fn().mockImplementation(function ModelRouterLanguageModelMock() {}),
+      };
+    });
     vi.resetModules();
   });
 
   afterEach(() => {
     vi.doUnmock('@mastra/libsql');
     vi.doUnmock('@mastra/rag');
+    vi.doUnmock('@mastra/core/llm');
     vi.resetModules();
   });
 
