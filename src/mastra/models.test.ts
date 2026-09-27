@@ -23,7 +23,7 @@ describe('model tiers', () => {
 
   it('puts paid providers first once their keys are set, free models after as fallbacks', () => {
     const tiers = buildModelTiers(ALL);
-    expect(tiers.ANALYST.map((m) => m.model).slice(0, 2)).toEqual(['anthropic/claude-opus-5', 'openai/gpt-5.5']);
+    expect(tiers.ANALYST.map((m) => m.model).slice(0, 2)).toEqual(['anthropic/claude-sonnet-5', 'openai/gpt-5.5']);
     expect(tiers.ANALYST.at(-1)!.model).toBe('groq/openai/gpt-oss-120b');
     expect(tiers.ROUTER[0]!.model).toBe('anthropic/claude-haiku-4-5');
     expect(tiers.RERANK).toBe('anthropic/claude-haiku-4-5');
@@ -39,7 +39,7 @@ describe('model tiers', () => {
     const env = { ...ALL, MODEL_PROVIDERS: 'anthropic, openai' };
     expect([...allowedProviders(env)].sort()).toEqual(['anthropic', 'openai']);
     const analyst = resolveTierModels('ANALYST', env);
-    expect(analyst).toEqual(['anthropic/claude-opus-5', 'openai/gpt-5.5']);
+    expect(analyst).toEqual(['anthropic/claude-sonnet-5', 'openai/gpt-5.5']);
     expect(analyst.some((m) => m.startsWith('google/') || m.startsWith('groq/'))).toBe(false);
   });
 

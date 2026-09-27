@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { MODELS } from '../models';
+import { AGENT_DEFAULT_OPTIONS, MODELS } from '../models';
 import { crawlSiteTool, readPageTool, recordEvidenceTool, webSearchTool } from '../tools/research';
 
 const PROJECT_ROOT = process.env.INIT_CWD || process.cwd();
@@ -85,6 +85,7 @@ Hard rules, in order:
    profile is full. An empty list is fine; a missing one is not.
 `.trim(),
   model: MODELS.ANALYST,
+  defaultOptions: AGENT_DEFAULT_OPTIONS,
   memory: new Memory(),
   tools: {
     web_search: webSearchTool,

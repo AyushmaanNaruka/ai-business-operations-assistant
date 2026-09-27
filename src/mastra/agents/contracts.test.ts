@@ -70,6 +70,15 @@ describe('delegate (D-66)', () => {
     expect(options.structuredOutput).toBeUndefined();
   });
 
+  it('scopes the specialist\'s tools to the task\'s sources through the request context (D-72)', async () => {
+    const agent = fakeAgent(() => Promise.resolve({ steps: [{ text: 'Done [E1].', toolResults: [recorded(sampleEvidence)] }] }));
+
+    await delegate(agent, buildTask('Q', ['src_1', 'src_4'], [], 'x'), { extractGaps: async () => [] });
+
+    const [, options] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[0] as [string, { requestContext?: { get: (k: string) => unknown } }];
+    expect(options.requestContext?.get('sourceIds')).toEqual(['src_1', 'src_4']);
+  });
+
   it('uses the answer and gaps from a specialist that still writes JSON, without the extraction call', async () => {
     const json = '```json\n{"answer":"No CLV in the data.","evidence":[],"gaps":["no customer level rows"],"failures":[]}\n```';
     const agent = fakeAgent(() => Promise.resolve({ steps: [{ text: json, toolResults: [] }] }));

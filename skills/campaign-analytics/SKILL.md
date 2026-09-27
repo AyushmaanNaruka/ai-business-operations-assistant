@@ -19,7 +19,7 @@ Compute these in SQL. Never estimate them.
 | CPM | (spend / impressions) * 1000 |
 | AOV | revenue / conversions |
 
-Always compute rates from summed numerators and denominators, never as the average of per row rates. `SUM(conversions) / SUM(clicks)` is correct; `AVG(conversions / clicks)` is a different and usually wrong number.
+Always compute rates from summed numerators and denominators, never as the average of per row rates. `SUM(conversions) / SUM(clicks)` is correct; `AVG(conversions / clicks)` is a different and usually wrong number (on the sample data it inflates conversion rate by about a quarter). This is checked in code: `run_sql` returns a `warnings` entry for any AVG over a ratio, including a ratio aliased in a CTE, and `record_evidence` refuses that SQL unless the claim says "average of per-row ..." (or per-day, per-campaign). When you see the warning, rewrite the query.
 
 ## Before any query
 
@@ -44,7 +44,7 @@ Then report the three or four findings that would change a decision. Not all of 
 
 **Flag small samples.** Under 100 clicks or under 30 conversions, a rate is noise. Say so. "This segment shows the highest conversion rate but on 47 clicks, which is not enough to act on" is a correct and valuable answer. Reporting it as the winner is bad analysis, and the demo dataset contains exactly this trap.
 
-**Use a significance test before calling a difference real.** `compute_stats` has a two sample t test. A five percent gap on small volumes usually is not a gap.
+**Use a significance test before calling a difference real.** To compare two segments' conversion rate or CTR, use `compute_stats` with `twoProportionZTest` (successes column, trials column, group column, the two groups); it sums per group and returns z, the two sided p value and `significantAt05`. For a per-row metric such as daily spend, use `tTestTwoSample` (Welch: t, df, p value). Report the p value; above 0.05, say the difference is not established. A five percent gap on small volumes usually is not a gap.
 
 ## Reporting
 

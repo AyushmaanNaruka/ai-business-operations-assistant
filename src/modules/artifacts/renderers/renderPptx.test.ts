@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import { DeckPlanSchema, type DeckPlan } from '@/modules/artifacts/schemas';
 import type { Evidence } from '@/types/evidence';
-import { renderPptx } from './renderPptx';
+import { deckEvidenceIds, renderPptx } from './renderPptx';
 
 const E1: Evidence = {
   id: 'E1',
@@ -166,8 +166,8 @@ describe('renderPptx', () => {
     const entryNames = Object.keys(zip.files).filter((name) => !zip.files[name]?.dir);
 
     const notesEntries = entryNames.filter((name) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name));
-    // One notes part per content slide.
-    expect(notesEntries).toHaveLength(plan.slides.length);
+    // One notes part per content slide, plus the code-rendered Sources slide.
+    expect(notesEntries).toHaveLength(plan.slides.length + 1);
 
     const notesContents = await Promise.all(notesEntries.map((name) => zip.file(name)!.async('text')));
     for (const content of notesContents) {
@@ -194,5 +194,33 @@ describe('renderPptx', () => {
     const buffer = await renderPptx(bigPlan, []);
     expect(buffer[0]).toBe(0x50);
     expect(buffer[1]).toBe(0x4b);
+  });
+
+  it('closes with a code-rendered Sources slide listing each cited evidence entry once', async () => {
+    const buffer = await renderPptx(plan, evidence);
+    const zip = await JSZip.loadAsync(buffer);
+    const slideNames = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    expect(slideNames).toHaveLength(plan.slides.length + 1);
+
+    const xml = await zip.file(`ppt/slides/slide${plan.slides.length + 1}.xml`)!.async('text');
+    // autoPage splits cell text into one run per word; join the runs back into text.
+    const last = [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((m) => m[1]).join('');
+    expect(last).toContain('Sources');
+    // E1 and E2 are cited by the deck; E3 is gathered but never cited, so it is not listed.
+    expect(last).toContain(E1.claim);
+    expect(last).toContain(E2.claim);
+    expect(last).not.toContain(E3.claim);
+    expect(last).toContain('campaigns.xlsx');
+  });
+
+  it('collects cited evidence ids in first-appearance order across slides, charts and tables', () => {
+    expect(deckEvidenceIds(plan)).toEqual(['E1', 'E2']);
+  });
+
+  it('adds no Sources slide when the deck cites nothing the ledger holds', async () => {
+    const buffer = await renderPptx(plan, []);
+    const zip = await JSZip.loadAsync(buffer);
+    const slideNames = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    expect(slideNames).toHaveLength(plan.slides.length);
   });
 });

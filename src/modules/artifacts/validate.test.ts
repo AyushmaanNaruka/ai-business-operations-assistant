@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Evidence } from '@/types/evidence';
 import type { Finding } from '@/types/finding';
-import { validatePlan } from './validate';
+import { isPlaceholderText, validatePlan } from './validate';
 
 // Realistic fixtures: campaign-analytics style claims, the kind M2/M4/M5 would actually
 // produce, so these tests double as documentation of what a real plan looks like.
@@ -122,6 +122,36 @@ describe('validatePlan: structural rejections (schema level)', () => {
     const errors = validatePlan(plan, 'workbook', context);
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.toLowerCase().includes('formula'))).toBe(true);
+  });
+
+  it('rejects a workbook formula that references a column by name, which Excel opens as #NAME?', () => {
+    const plan = {
+      title: 'Q3 Workbook',
+      generatedAt: '2026-09-20',
+      summary: {
+        headline: [{ label: 'Blended ROAS', value: 37.6, evidenceIds: ['E1'] }],
+        findings: ['Email outperforms blended average', 'Paid social spend rose sharply'],
+      },
+      recommendations: [
+        {
+          findingId: 'F1',
+          recommendation: 'Shift budget toward email',
+          rationale: 'Email converts at twice the blended average',
+          supportingDataRange: 'Data!A2:K500',
+          confidence: 'medium',
+        },
+      ],
+      calculations: [
+        { label: 'Blended ROAS', formula: '=SUM(Data!revenue)/SUM(Data!spend)', evidenceIds: ['E1'] },
+        { label: 'Email ROAS', formula: '=SUMIF(Data!$B$2:$B$1204,"Email",Data!K2:K1204)/SUM(Data!G:G)', evidenceIds: ['E1'] },
+      ],
+      sources: [{ evidenceId: 'E1', claim: 'Blended ROAS', sourceName: 'campaigns.xlsx', locator: 'computed' }],
+    };
+    const errors = validatePlan(plan, 'workbook', context);
+    expect(errors.filter((e) => e.includes('is not a cell reference'))).toEqual([
+      'plan.calculations[0].formula: "Data!revenue" is not a cell reference or a Data column name; use an A1 range from the Data sheet layout, e.g. Data!K2:K1204',
+      'plan.calculations[0].formula: "Data!spend" is not a cell reference or a Data column name; use an A1 range from the Data sheet layout, e.g. Data!K2:K1204',
+    ]);
   });
 
   it('rejects a report recommendation with no evidenceIds and isJudgment left false (evidence-or-judgment refine)', () => {
@@ -356,5 +386,89 @@ describe('validatePlan: a fully valid plan', () => {
     };
     const errors = validatePlan(plan, 'report', context);
     expect(errors).toEqual([]);
+  });
+});
+
+describe('isPlaceholderText: template slots a model left unfilled', () => {
+  it.each([
+    '[Client Name]',
+    'Prepared for [Client Name] on [date]',
+    'Focus on [mention a high-level area of focus here]',
+    '[Insert X]',
+    'TBD',
+    'Conversion rose XX% quarter on quarter',
+    'Budget of $X for the pilot',
+    'A lift of X.X% is expected',
+    'Owner: TBC',
+    'Hello {{client_name}}',
+    'Target date to be confirmed',
+  ])('flags %j', (text) => {
+    expect(isPlaceholderText(text)).toBe(true);
+  });
+
+  it.each([
+    'Email converts at 4.2% [E12]',
+    'Spend rose sharply [E12, E13] while revenue stayed flat [F3]',
+    'Both sources agree [E2; E5] and [E7-E9]',
+    'Per the positioning doc [Source: E4]',
+    'The brand calls it "retail-ready" [sic]',
+    'See the [pricing page](https://example.com/pricing)',
+    'Xbox and next-quarter plans are out of scope',
+    'Week 3 launches the pilot',
+  ])('does not flag %j', (text) => {
+    expect(isPlaceholderText(text)).toBe(false);
+  });
+
+  it('rejects a deck title slide carrying a bracket placeholder', () => {
+    const slide = (title: string) => ({ title, bullets: ['One point'], notes: 'What I would say.', evidenceIds: [] });
+    const plan = {
+      title: 'Q3 Review',
+      slides: [slide('Q3 review for [Client Name]'), slide('Two'), slide('Three'), slide('Four'), slide('Five')],
+    };
+    const errors = validatePlan(plan, 'deck', context);
+    expect(errors).toContain('Placeholder or empty text at plan.slides[0].title: "Q3 review for [Client Name]"');
+  });
+});
+
+describe('validatePlan: workbook formulas against the real Data sheet', () => {
+  const workbook = (formula: string) => ({
+    title: 'Q3 Workbook',
+    generatedAt: '2024-05-13', // model-authored: no longer a schema field, stripped on parse
+    summary: {
+      headline: [{ label: 'Email conversion rate', value: 4.2, evidenceIds: ['E1'] }],
+      findings: ['Email outperforms blended average', 'Paid social spend rose sharply'],
+    },
+    recommendations: [
+      {
+        findingId: 'F1',
+        recommendation: 'Shift budget toward email',
+        rationale: 'Email converts at twice the blended average',
+        supportingDataRange: 'Data!A2:C11',
+        confidence: 'medium',
+      },
+    ],
+    calculations: [{ label: 'Total revenue', formula, evidenceIds: ['E1'] }],
+    sources: [{ evidenceId: 'E1', claim: 'Email conversion rate', sourceName: 'campaigns.xlsx', locator: 'computed' }],
+  });
+  const dataSheet = { headers: ['channel', 'spend', 'revenue'], rowCount: 10 };
+
+  it('accepts a real Data column by name (the renderer resolves it) and in-bounds A1 ranges', () => {
+    expect(validatePlan(workbook('=SUM(Data!revenue)/SUM(Data!spend)'), 'workbook', { ...context, dataSheet })).toEqual([]);
+    expect(validatePlan(workbook('=SUM(Data!C2:C11)'), 'workbook', { ...context, dataSheet })).toEqual([]);
+  });
+
+  it('rejects an unknown column name, an out-of-bounds range, and the lowercase-sheet and three-capital holes', () => {
+    for (const formula of ['=SUM(Data!conversions)', '=SUM(Data!K2:K1204)', '=SUM(data!clicks)', '=SUM(Data!CPA)', '=SUM(revenue)']) {
+      const errors = validatePlan(workbook(formula), 'workbook', { ...context, dataSheet });
+      expect(errors.some((e) => e.startsWith('plan.calculations[0].formula:')), formula).toBe(true);
+    }
+  });
+
+  it('rejects any Data reference when the Data sheet has no rows', () => {
+    const errors = validatePlan(workbook('=SUM(Data!A2:A10)'), 'workbook', {
+      ...context,
+      dataSheet: { headers: [], rowCount: 0 },
+    });
+    expect(errors.some((e) => e.includes('has no rows'))).toBe(true);
   });
 });

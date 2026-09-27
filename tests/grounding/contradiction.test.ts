@@ -7,7 +7,7 @@ import { buildTask, delegate } from '@/mastra/agents/contracts';
 import { dataAnalyst } from '@/mastra/agents/dataAnalyst';
 import { documentAgent } from '@/mastra/agents/documentAgent';
 import { detectConflicts } from '@/modules/evidence';
-import { contradictionScorer, runAndAssert, type ContradictionOutput } from './scorers';
+import { contradictionScorer, runAndAssert, sampleSourceIds, type ContradictionOutput } from './scorers';
 
 /**
  * Grounding eval 3/4 (docs/09-TESTING.md section 3, docs/03-ARCHITECTURE.md Part 10
@@ -33,15 +33,17 @@ describe('Grounding eval: contradiction', () => {
   it(
     'surfaces both the computed Paid Social figure and the customer-notes claim, with sources, picking no winner',
     async () => {
+      // Both legs get the same scope, as runTurn gives every leg of a mixed turn.
+      const scope = await sampleSourceIds('campaigns.xlsx', 'customer-notes.docx');
       const dataTask = buildTask(
         "What is Paid Social's conversion rate, computed from our campaign data?",
-        [],
+        scope,
         [],
         'a grounded, evidence-cited answer computed from the relevant tables',
       );
       const documentTask = buildTask(
         'What do our internal customer/team notes say about which channel performs best, specifically about Paid Social?',
-        [],
+        scope,
         [],
         'a grounded, evidence-cited answer quoting or citing the relevant document passages',
       );

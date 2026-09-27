@@ -36,9 +36,18 @@ export type DocumentPlan = {
 
 export type DocumentPlanKind = 'report' | 'summary' | 'plan' | 'brief' | 'generic';
 
-/** Renders an id list as evidence-citation's inline format, e.g. " [E1, E4]", or "" when empty. */
-function cite(ids: readonly string[] | undefined): string {
-  return ids && ids.length > 0 ? ` [${ids.join(', ')}]` : '';
+/**
+ * Appends evidence-citation's inline format to `text`, e.g. "Email leads [E1, E4]",
+ * skipping any id the text already cites. Authors often write the ids inline
+ * themselves ("...rose 60% [E199]."); appending them again produced "[E199]. [E199]" in
+ * shipped documents. Ids are matched as whole tokens, so E1 already in the text never
+ * hides E12. Returns `text` unchanged when nothing is left to add.
+ */
+export function cite(text: string, ...idLists: (readonly string[] | undefined)[]): string {
+  const missing = [...new Set(idLists.flatMap((ids) => ids ?? []))].filter(
+    (id) => !new RegExp(`(^|[^A-Za-z0-9])${id}(?![0-9])`).test(text),
+  );
+  return missing.length > 0 ? `${text} [${missing.join(', ')}]` : text;
 }
 
 function bulletList(lines: string[]): string {
@@ -52,7 +61,7 @@ function fromReport(plan: ReportPlan): DocumentPlan {
     ...plan.findings.map((finding) => ({
       heading: finding.statement,
       body: [
-        `${finding.soWhat}${cite(finding.evidenceIds)}`,
+        cite(finding.soWhat, finding.evidenceIds),
         ...(finding.caveats ?? []).map((caveat) => `Caveat: ${caveat}`),
       ].join('\n\n'),
     })),
@@ -60,7 +69,7 @@ function fromReport(plan: ReportPlan): DocumentPlan {
     ...plan.recommendations.map((rec) => ({
       heading: rec.statement,
       body: [
-        `${rec.expectedEffect}${cite(rec.findingIds)}${cite(rec.evidenceIds)}`,
+        cite(rec.expectedEffect, rec.findingIds, rec.evidenceIds),
         `Measured by: ${rec.measurement}`,
         ...(rec.isJudgment ? ['This is a judgment call, not a figure from the data.'] : []),
       ].join('\n\n'),
@@ -68,7 +77,7 @@ function fromReport(plan: ReportPlan): DocumentPlan {
     { heading: 'Method', body: plan.method },
     ...(plan.charts ?? []).map((chart) => ({
       heading: chart.title,
-      body: `Chart data${cite(chart.evidenceIds)}.`,
+      body: `${cite('Chart data', chart.evidenceIds)}.`,
       chart,
     })),
   ];
@@ -83,11 +92,11 @@ function fromSummary(plan: SummaryPlan): DocumentPlan {
     { heading: 'Situation', body: `${plan.situation} (as of ${plan.asOfDate})` },
     {
       heading: 'Findings',
-      body: plan.findings.map((finding, i) => `${i + 1}. ${finding.statement}${cite(finding.evidenceIds)}`).join('\n\n'),
+      body: plan.findings.map((finding, i) => `${i + 1}. ${cite(finding.statement, finding.evidenceIds)}`).join('\n\n'),
     },
     {
       heading: 'Recommendation',
-      body: `${plan.recommendation.statement}\n\n${plan.recommendation.expectedEffect}${cite(plan.recommendation.evidenceIds)}`,
+      body: cite(`${plan.recommendation.statement}\n\n${plan.recommendation.expectedEffect}`, plan.recommendation.evidenceIds),
     },
     ...(plan.whatWeCouldNotDetermine && plan.whatWeCouldNotDetermine.length > 0
       ? [{ heading: 'What We Could Not Determine', body: bulletList(plan.whatWeCouldNotDetermine) }]
@@ -109,7 +118,7 @@ function fromPlan(plan: CampaignPlan): DocumentPlan {
   const sections: DocumentSection[] = [
     { heading: 'TL;DR', body: plan.tldr },
     { heading: 'Objective', body: `${plan.objective} By ${plan.objectiveDate}.` },
-    { heading: 'Why This, Now', body: `${plan.whyThisNow}${cite(plan.whyThisNowFindingIds)}` },
+    { heading: 'Why This, Now', body: cite(plan.whyThisNow, plan.whyThisNowFindingIds) },
     { heading: 'Audience', body: plan.audience },
     { heading: 'Message', body: [plan.message.core, bulletList(plan.message.supportingPoints)].join('\n\n') },
     { heading: 'Channel Mix', body: 'Budget split, justified against the performance evidence.', table: channelMixTable },
@@ -124,7 +133,7 @@ function fromPlan(plan: CampaignPlan): DocumentPlan {
       heading: 'Budget',
       body: [
         ...plan.budget.map(
-          (line) => `${line.channel}: $${line.amount.toLocaleString()} — ${line.basis}${line.isAssumption ? ' (assumption)' : ''}${cite(line.evidenceIds)}`,
+          (line) => cite(`${line.channel}: $${line.amount.toLocaleString()} — ${line.basis}${line.isAssumption ? ' (assumption)' : ''}`, line.evidenceIds),
         ),
         `Total: $${budgetTotal.toLocaleString()}`,
       ].join('\n'),
@@ -151,7 +160,7 @@ function fromBrief(plan: ContentBriefPlan): DocumentPlan {
     { heading: 'Angle', body: plan.angle },
     {
       heading: 'Key Points',
-      body: bulletList(plan.keyPoints.map((kp) => (kp.evidenceIds?.length ? `${kp.point}${cite(kp.evidenceIds)}` : `${kp.point} (framing)`))),
+      body: bulletList(plan.keyPoints.map((kp) => (kp.evidenceIds?.length ? cite(kp.point, kp.evidenceIds) : `${kp.point} (framing)`))),
     },
     { heading: 'Outline', body: bulletList(plan.outline.map((o) => `${o.heading} — ${o.line}`)) },
     { heading: 'Tone', body: `${plan.tone.description}\n\nExample: "${plan.tone.example}"` },
@@ -177,7 +186,7 @@ function fromBrief(plan: ContentBriefPlan): DocumentPlan {
 function fromGeneric(plan: GenericDocumentPlan): DocumentPlan {
   const sections: DocumentSection[] = [
     { heading: 'Purpose', body: `${plan.purpose}\n\nStructure: ${plan.structureRationale}` },
-    ...plan.sections.map((s) => ({ heading: s.heading, body: `${s.body}${cite(s.evidenceIds)}` })),
+    ...plan.sections.map((s) => ({ heading: s.heading, body: cite(s.body, s.evidenceIds) })),
   ];
   return { title: plan.title, sections, sources: plan.sources ?? [] };
 }

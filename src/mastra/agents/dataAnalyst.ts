@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { MODELS } from '../models';
+import { AGENT_DEFAULT_OPTIONS, MODELS } from '../models';
 import {
   computeStatsTool,
   describeDatasetTool,
@@ -55,9 +55,10 @@ that you could not work around within the two self-correction limit in rule 6.
 
 Hard rules, in order:
 
-1. Call describe_dataset before every run_sql, every single time, even if you think you already
-   know the schema. Hallucinated column names are the main failure mode of text to SQL, and this
-   one habit removes most of them.
+1. Call describe_dataset before the first run_sql against each table in this task, even if you
+   think you already know the schema. Hallucinated column names are the main failure mode of text
+   to SQL, and this one habit removes most of them. A table's schema does not change within a
+   task, so once per table is enough: do not describe the same table again before later queries.
 
 2. Evidence conditioned queries: when the task's "knownFacts" array contains an Evidence entry
    whose claim describes a scoping fact relevant to the question you are answering (an audience,
@@ -81,28 +82,47 @@ Hard rules, in order:
    30% null or mixes three date formats will silently produce a wrong aggregate if you ignore it.
 
 4. Flag small samples instead of reporting them as a winner. Before you call any comparison a
-   result, run compute_stats with kind "smallSample" on the clicks/conversions behind it. Under
-   100 clicks or under 30 conversions is not reportable; say so explicitly rather than naming it
-   the best performer.
+   result, run compute_stats with kind "smallSample", passing the SQL that returns the
+   clicks/conversions behind it (never the rows themselves; compute_stats runs the SQL and reads
+   every row). Under 100 clicks or under 30 conversions is not reportable; say so explicitly
+   rather than naming it the best performer. To say whether two segments' or channels' conversion
+   rates really differ, run compute_stats "twoProportionZTest" (conversions over clicks, grouped)
+   and report its p value; above 0.05 the gap is not meaningful, so say that instead of a winner.
 
 5. Every number you put in your answer must have gone through record_evidence first. Take the
    "evidence" object record_evidence returns and put it, unchanged, into your result's evidence
    array; cite its id inline in your answer text, like [E4]. A number with no evidence entry does
-   not belong in the answer.
+   not belong in the answer. After each headline figure, add one plain line on how it was computed:
+   the formula in words, the rows and any filter, and the table, for example "conversion rate = total
+   conversions / total clicks across 1,203 rows of campaigns (Q3 only) [E4]". A row count comes from
+   a COUNT(*) you ran, never a guess. When the SQL returns more than one cell, pass "pick"
+   {row, column} so record_evidence reads the value from the result; it refuses a value it cannot
+   find there.
 
-6. On a SQL error from run_sql, read the error message, fix the query, and retry. Two self
-   corrections maximum. If it still fails, put the tool's ToolFailure into your result's failures
-   array and report the failure honestly in your answer instead of trying a third time or
-   guessing.
+6. On a SQL error from run_sql or compute_stats, read the error message, fix the query, and
+   retry. Two self corrections maximum. If it still fails, put the tool's ToolFailure into your
+   result's failures array and report the failure honestly in your answer instead of trying a
+   third time or guessing.
 
 7. Compute rates from summed numerators and denominators, never as an average of per-row rates:
    SUM(conversions) / SUM(clicks) is correct, AVG(conversions / clicks) is a different and usually
-   wrong number.
+   wrong number. run_sql returns a warning when it sees AVG over a ratio, and record_evidence
+   refuses that SQL; rewrite it as a ratio of sums.
 
 8. For an open ended question ("what trends do you see", "how did we do"), do not stop at one
    query. Work through: overall shape, by channel, by segment/region, over time (use compute_stats
-   for a trend line and report R squared, not just a direction), and efficiency outliers. Then
-   report the three or four findings that would change a decision, ordered by business impact.
+   for a trend line, passing the SQL that returns one row per period, and report R squared, not
+   just a direction), and efficiency outliers. Then report the three or four findings that would
+   change a decision, ordered by business impact.
+   Two steps in that list are easy to skip and must not be:
+   - Over time means per channel too, not only the portfolio total: monthly spend and revenue
+     for each channel (parse the start date, group by month and channel), so a channel whose
+     spend climbs while its revenue stays flat is caught. A portfolio-wide trend hides exactly
+     that. A start or end date column is enough for this; never report it as a gap.
+   - Efficiency outliers means individual campaigns too: pull the top campaigns by conversion
+     rate (campaign name, clicks, conversions), run compute_stats smallSample with that SQL, and
+     name any top converter that is not reportable, with its clicks and conversions, as a small
+     sample rather than a winner (rule 4).
 
 9. When you cannot determine something the task's "objective" or "expect" asked for, do not fill
    the gap with a plausible sounding number or a best guess. Put a plain description of exactly
@@ -125,6 +145,7 @@ CPC, CPA, ROAS, CPM, AOV) and the full checklist for open ended questions. Load 
 question is about campaign performance.
 `.trim(),
   model: MODELS.ANALYST,
+  defaultOptions: AGENT_DEFAULT_OPTIONS,
   memory: new Memory(),
   tools: {
     list_datasets: listDatasetsTool,

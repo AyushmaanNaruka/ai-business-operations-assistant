@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { Agent } from '@mastra/core/agent';
+import { ToolCallFilter } from '@mastra/core/processors';
 import { createTool } from '@mastra/core/tools';
 import { Memory } from '@mastra/memory';
 import { z } from 'zod';
@@ -8,7 +9,7 @@ import { addArtifact, addFinding, addOpenGap, renderManifest, resolveReference, 
 import { ArtifactPlanKindSchema, type ArtifactPlanKind } from '@/modules/artifacts/schemas';
 import { detectConflicts, openLedger, type AddFindingInput, type Conflict, type EvidenceLedger } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
-import { MODELS } from '../models';
+import { AGENT_DEFAULT_OPTIONS, MODELS } from '../models';
 import { resolveSessionId } from '../runtime';
 import { openManifestStore, type ManifestStore } from '../session/manifestStore';
 import { artifactWorkflow } from '../workflows/artifact';
@@ -123,7 +124,9 @@ what has already been found), then answer with the single best fitting class.
 - "artifact": asks for a generated file, e.g. "Build me a slide deck", "Make a
   spreadsheet summarising this"
 - "mixed": the request genuinely needs more than one of the above at once, e.g.
-  "Research this competitor and compare it to our own campaign performance"
+  "Research this competitor and compare it to our own campaign performance", or
+  "Now compare that with the audience in the brief" after a data answer (it needs the
+  document's text and a fresh data query scoped by it)
 - "unsupported": out of scope for this system entirely, e.g. "Email this to my
   manager", "Log into our CRM and pull the numbers", "Run this Python script"
 
@@ -144,6 +147,7 @@ function getClassifierAgent(): Agent {
       description: 'Classifies a user request into one of the orchestrator\'s seven intent classes. No tools.',
       instructions: CLASSIFIER_INSTRUCTIONS,
       model: MODELS.ROUTER,
+      defaultOptions: AGENT_DEFAULT_OPTIONS,
     });
   }
   return classifierAgent;
@@ -217,10 +221,10 @@ export type ActionDecision =
   | { kind: 'unsupported'; message: string }
   | { kind: 'artifact_stub'; message: string }
   | { kind: 'answer_directly' }
-  | { kind: 'delegate'; specialists: SpecialistLabel[] };
+  | { kind: 'delegate'; specialists: SpecialistLabel[]; sourceIds?: string[] };
 
 const CAPABILITIES_LINE =
-  'answer questions from your data, your documents, and public web research, suggest recommendations grounded in what has already been found, and (soon) generate artifacts like decks and spreadsheets';
+  'answer questions from your data, your documents, and public web research, suggest recommendations grounded in what has already been found, and build reports, spreadsheets, decks and plans from those findings for you to download';
 
 // Matches docs/08-DEMO-SCENARIOS.md Scenario C's "email this to my manager" case:
 // when the request reads as "send/email/mail" something and an artifact already
@@ -236,17 +240,111 @@ function unsupportedMessage(message: string, manifest: SessionManifest): string 
   return `I cannot do that here. What I can do is ${CAPABILITIES_LINE}.`;
 }
 
-function specialistsForMixed(sourceIds: string[], manifest: SessionManifest): SpecialistLabel[] {
+// A request that sets something against something else ("compare that with the audience
+// in the brief", "how does this stack up against the notes"). Literal, like
+// DEPENDENCY_MARKERS below: routing policy stays testable with plain strings.
+const COMPARISON_PATTERN = /\b(compare[ds]?|comparing|comparison|against|versus|vs\.?|stack up|line up)\b/i;
+
+const TABULAR_SOURCE_KINDS: ReadonlySet<string> = new Set(['xlsx', 'csv', 'json']);
+const DOCUMENT_SOURCE_KINDS: ReadonlySet<string> = new Set(['pdf', 'docx', 'txt']);
+
+/**
+ * docs/08-DEMO-SCENARIOS.md Scenario A turn 3: "Now compare that with the audience in
+ * the brief". A comparison against a document, in a session with a spreadsheet loaded,
+ * is a document fact that should become a query constraint (P5.5), so it needs the
+ * document leg and then a data leg. The caller usually scopes the request to the
+ * document it names, so the ready tabular sources join the scope; without them the data
+ * leg would have no table to query. Returns null when the rule does not apply.
+ */
+function comparisonWithDocument(
+  message: string,
+  sourceIds: string[],
+  manifest: SessionManifest,
+): { specialists: SpecialistLabel[]; sourceIds: string[] } | null {
+  if (!COMPARISON_PATTERN.test(message)) return null;
+  const tabular = manifest.sources.filter((s) => s.status === 'ready' && TABULAR_SOURCE_KINDS.has(s.kind));
+  if (tabular.length === 0) return null;
+  const scopedDocuments = manifest.sources.filter(
+    (s) => DOCUMENT_SOURCE_KINDS.has(s.kind) && (sourceIds.length === 0 || sourceIds.includes(s.id)),
+  );
+  if (scopedDocuments.length === 0) return null;
+  // An empty scope already means "every source", so it stays empty.
+  const widened = sourceIds.length === 0 ? [] : [...new Set([...sourceIds, ...tabular.map((s) => s.id)])];
+  return { specialists: ['document', 'data'], sourceIds: widened };
+}
+
+// A request that asks for the public web (docs/08-DEMO-SCENARIOS.md Scenario B: "Research
+// this company, analyze the campaign data I uploaded, and prepare a campaign strategy
+// based on both"). Nothing in the manifest says "web" until research has run (research
+// evidence cites its URL; no web source is ever registered), so the message itself is the
+// only reliable signal. Literal on purpose, like COMPARISON_PATTERN: routing stays pure.
+const RESEARCH_CUE_PATTERN =
+  /\b(research|look(?:ing)? up|search (?:the )?(?:web|online|internet)|google|(?:company|their|its|our|the|this) (?:web ?site|homepage)|competitors?|their (?:site|pricing|positioning))\b|https?:\/\/|\bwww\.|\b[a-z0-9-]+\.(?:com|io|ai|co|net|org|dev|app)\b/i;
+
+/** True when the message itself asks for public web research (a verb, a competitor, a URL or a domain). */
+export function hasResearchCue(message: string): boolean {
+  return RESEARCH_CUE_PATTERN.test(message);
+}
+
+/**
+ * Which specialists a "mixed" request needs: the kinds of the scoped sources decide data
+ * and document, and the message decides research (hasResearchCue), since a web source is
+ * never in the manifest before research has run. Pure, tested with plain objects.
+ */
+export function specialistsForMixed(sourceIds: string[], manifest: SessionManifest, message = ''): SpecialistLabel[] {
   const scoped = sourceIds.length > 0 ? manifest.sources.filter((s) => sourceIds.includes(s.id)) : manifest.sources;
   const kinds = new Set(scoped.map((s) => s.kind));
   const specialists: SpecialistLabel[] = [];
   if (kinds.has('xlsx') || kinds.has('csv') || kinds.has('json')) specialists.push('data');
   if (kinds.has('pdf') || kinds.has('docx') || kinds.has('txt')) specialists.push('document');
-  if (kinds.has('web')) specialists.push('research');
+  if (kinds.has('web') || hasResearchCue(message)) specialists.push('research');
   // Nothing matched (no sources loaded yet, or none of the scoped ids resolved to a
   // kind): fall back to the two most common specialists rather than delegating
   // nowhere. Each reports its own gap honestly if it finds nothing relevant.
   return specialists.length > 0 ? specialists : ['data', 'document'];
+}
+
+const RESEARCH_FINDING_PREFIX = findingReasoning('research', '');
+
+/** The Finding.reasoning buildFinding writes, so a later turn can tell which findings came from the web. */
+function findingReasoning(specialist: SpecialistLabel, objective: string): string {
+  return `Established by the ${specialist} specialist for: ${objective}`;
+}
+
+// A request that points at the company or audience research already covered ("compare it
+// with the target company's audience"), and one that points at an uploaded document.
+const COMPANY_REFERENCE_PATTERN = /\b(company|companies|competitors?|their|them|brand|audience|target)\b/i;
+const DOCUMENT_REFERENCE_PATTERN = /\b(brief|document|doc|pdf|notes|file)\b/i;
+
+/**
+ * Turn 2 of Scenario B: "Now compare it with the target company's audience", where the
+ * audience came from research, not from an uploaded document. Needs a table to compare
+ * and either a fresh research cue or a research finding already in the manifest:
+ * - a prior research finding is reused, not re-crawled: every finding's evidence already
+ *   reaches the data leg as knownFacts (gatherKnownFactsForData), so the data leg alone
+ *   can scope its SQL by the researched audience (dataAnalyst.ts rule 2);
+ * - otherwise a research cue (or a "research" classification naming the company) runs
+ *   research, then data, so the fact exists before the SQL does (decideDelegationMode
+ *   orders it when the comparison is about an audience or segment).
+ * Returns null when the rule does not apply.
+ */
+export function comparisonWithResearch(
+  message: string,
+  sourceIds: string[],
+  manifest: SessionManifest,
+  classifiedAsResearch = false,
+): { specialists: SpecialistLabel[]; sourceIds: string[] } | null {
+  if (!COMPARISON_PATTERN.test(message)) return null;
+  const tabular = manifest.sources.filter((s) => s.status === 'ready' && TABULAR_SOURCE_KINDS.has(s.kind));
+  if (tabular.length === 0) return null;
+  const widened = sourceIds.length === 0 ? [] : [...new Set([...sourceIds, ...tabular.map((s) => s.id)])];
+  if (hasResearchCue(message)) return { specialists: ['research', 'data'], sourceIds: widened };
+  const researched = manifest.findings.some((f) => f.reasoning.startsWith(RESEARCH_FINDING_PREFIX));
+  const namesCompany = COMPANY_REFERENCE_PATTERN.test(message);
+  if (researched && namesCompany) return { specialists: ['data'], sourceIds: widened };
+  // Not researched yet, but the classifier read it as research: research, then data.
+  if (classifiedAsResearch && namesCompany) return { specialists: ['research', 'data'], sourceIds: widened };
+  return null;
 }
 
 /**
@@ -288,6 +386,27 @@ export function decideAction(intent: Intent, sourceIds: string[], manifest: Sess
       : { kind: 'not_found', message: guard.error.message };
   }
 
+  // A comparison needs its fact leg (a document or research) and then a data leg. A
+  // message naming a document ("the audience in the brief") tries the document rule first;
+  // anything else tries research first, so "the target company's audience" is not sent to
+  // a brief that is about the user's own company.
+  // A plain "data" intent is left alone: it already receives every prior finding's
+  // evidence, researched audience included, as knownFacts.
+  if (intent === 'document' || intent === 'mixed' || intent === 'research') {
+    const byDocument = () => (intent === 'research' ? null : comparisonWithDocument(message, sourceIds, manifest));
+    const byResearch = () => comparisonWithResearch(message, sourceIds, manifest, intent === 'research');
+    const comparison = DOCUMENT_REFERENCE_PATTERN.test(message)
+      ? (byDocument() ?? byResearch())
+      : (byResearch() ?? byDocument());
+    if (comparison) {
+      return {
+        kind: 'delegate',
+        specialists: comparison.specialists,
+        ...(comparison.sourceIds.length > 0 ? { sourceIds: comparison.sourceIds } : {}),
+      };
+    }
+  }
+
   const specialists: SpecialistLabel[] =
     intent === 'data'
       ? ['data']
@@ -295,7 +414,7 @@ export function decideAction(intent: Intent, sourceIds: string[], manifest: Sess
         ? ['document']
         : intent === 'research'
           ? ['research']
-          : specialistsForMixed(sourceIds, manifest);
+          : specialistsForMixed(sourceIds, manifest, message);
 
   return { kind: 'delegate', specialists };
 }
@@ -338,6 +457,9 @@ const SPECIALIST_KEYWORDS: Record<SpecialistLabel, RegExp> = {
   document: /\b(document|pdf|brief|report|the text)\b/i,
 };
 
+// What a comparison scopes the SQL by, when the fact comes from research rather than a document.
+const SCOPING_SUBJECT_PATTERN = /\b(audiences?|segments?|target (?:market|customers?|buyers?)|ideal customer|icp|who (?:they|it) (?:sells? to|targets?))\b/i;
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -365,7 +487,16 @@ export function decideDelegationMode(message: string, specialists: SpecialistLab
   const hasDependency = DEPENDENCY_MARKERS.some((marker) =>
     new RegExp(`\\b${escapeRegExp(marker)}\\b`, 'i').test(message),
   );
-  if (!hasDependency) return { mode: 'parallel' };
+  // Comparing data with a document is a dependency even without "then": the document's
+  // fact (an audience, a region) has to exist before it can scope the SQL (P5.5). The same
+  // holds for research when what is compared is an audience or segment ("compare it with
+  // the target company's audience"); a competitor comparison with nothing to scope by
+  // stays parallel.
+  const comparesFactWithData =
+    COMPARISON_PATTERN.test(message) &&
+    specialists.includes('data') &&
+    (specialists.includes('document') || (specialists.includes('research') && SCOPING_SUBJECT_PATTERN.test(message)));
+  if (!hasDependency && !comparesFactWithData) return { mode: 'parallel' };
 
   const firstKeywordIndex = (label: SpecialistLabel): number => {
     const match = SPECIALIST_KEYWORDS[label].exec(message);
@@ -375,6 +506,11 @@ export function decideDelegationMode(message: string, specialists: SpecialistLab
   // Stable sort: a specialist whose keyword never matches (index Infinity) keeps its
   // original relative position rather than being reshuffled arbitrarily.
   const order = [...specialists].sort((a, b) => firstKeywordIndex(a) - firstKeywordIndex(b));
+  // The data leg runs last, after every fact leg it is compared with.
+  if (comparesFactWithData) {
+    order.splice(order.indexOf('data'), 1);
+    order.push('data');
+  }
 
   return { mode: 'sequential', order };
 }
@@ -579,7 +715,10 @@ function expectFor(label: SpecialistLabel): string {
  * specialist result (contracts.ts), and that is caught here and turned into a
  * ToolResult failure instead of reaching the agent loop (AGENTS.md rule 5).
  */
-const RATE_LIMIT_SIGNATURE = /\b429\b|RESOURCE_EXHAUSTED|rate limit|quota|too many requests|request too large/i;
+// "usage limit" is Anthropic's spend cap (an HTTP 400, not a 429); "tokens per minute" is
+// Groq's per-request TPM ceiling (a 413). Both mean no retry this turn can succeed.
+const RATE_LIMIT_SIGNATURE =
+  /\b429\b|RESOURCE_EXHAUSTED|rate limit|quota|too many requests|request too large|usage limit|tokens per minute/i;
 
 /**
  * True when a delegation failed because the providers are out of capacity, not because the
@@ -602,8 +741,12 @@ export async function runDelegation(
   const guard = checkSourcesReady(task.sourceIds, manifest);
   if (!guard.ok) return guard;
 
+  // An empty scope means "every source in this conversation"; name them, since
+  // delegate() hands exactly these ids to the tools as the only ones they may read (D-72).
+  const scopedTask = task.sourceIds.length > 0 ? task : { ...task, sourceIds: manifest.sources.map((s) => s.id) };
+
   try {
-    const result = await delegateFn(SPECIALIST_AGENTS[specialist], task);
+    const result = await delegateFn(SPECIALIST_AGENTS[specialist], scopedTask);
     return { ok: true, data: result };
   } catch (err) {
     if (isRateLimitError(err)) {
@@ -646,7 +789,7 @@ export function buildFinding(
   return {
     statement: result.answer,
     evidenceIds: confirmed.map((e) => e.id),
-    reasoning: `Established by the ${specialist} specialist for: ${objective}`,
+    reasoning: findingReasoning(specialist, objective),
     soWhat: '',
     confidence,
     ...(result.gaps.length > 0 ? { caveats: result.gaps } : {}),
@@ -710,6 +853,8 @@ export async function runTurn(message: string, sourceIds: string[], manifest: Se
   // turn (buildTaskFor ignores manifestFacts for document/research anyway), so a
   // document- or research-only turn never touches the ledger at all.
   const manifestFacts = decision.specialists.includes('data') ? await gatherKnownFacts(manifest) : [];
+  // decideAction may widen the scope (a comparison with a document pulls in the tables).
+  const scopedSourceIds = decision.sourceIds ?? sourceIds;
 
   // Rule 4 / P5.4: decide parallel vs sequential from the request itself, not from a
   // second model call. Single-specialist intents (data/document/research) always come
@@ -740,7 +885,7 @@ export async function runTurn(message: string, sourceIds: string[], manifest: Se
             progressEvents.push({ kind: 'delegation_start', specialist, label: planLabelFor(specialist), at: now() });
             const result = await runDelegation(
               specialist,
-              buildTaskFor(specialist, message, sourceIds, [], manifestFacts),
+              buildTaskFor(specialist, message, scopedSourceIds, [], manifestFacts),
               manifest,
               delegateFn,
             );
@@ -755,7 +900,7 @@ export async function runTurn(message: string, sourceIds: string[], manifest: Se
         // place in the file where "evidence relevant to this specialist" is
         // assembled before buildTask; P5.5 additionally folds manifestFacts into
         // whichever leg is "data" (see runSequentialDelegation).
-        await runSequentialDelegation(plan.order, message, sourceIds, manifest, delegateFn, manifestFacts, requestPlan, progressEvents, now);
+        await runSequentialDelegation(plan.order, message, scopedSourceIds, manifest, delegateFn, manifestFacts, requestPlan, progressEvents, now);
 
   // P5.6: before synthesis, check whether any evidence gathered THIS turn disagrees
   // with any other evidence gathered this turn, via the same metric-key comparison
@@ -829,7 +974,9 @@ async function runSequentialDelegation(
 
     // Carry the evidence forward only on success; a failed leg contributes nothing
     // to the next task's knownFacts rather than passing along a stale or empty guess.
-    knownFacts = result.ok ? result.data.evidence : [];
+    // Accumulated, so the last leg of a three-leg chain (document, research, then data)
+    // sees both earlier legs' facts, not only the one just before it.
+    if (result.ok) knownFacts = dedupeEvidenceById([...knownFacts, ...result.data.evidence]);
   }
 
   return outcomes;
@@ -905,6 +1052,39 @@ const conflictSchema: z.ZodType<Conflict> = z.object({
 // here the same way metricKeySchema/conflictSchema above mirror types they do not own.
 const artifactKindSchema: z.ZodType<ArtifactKind> = z.enum(['xlsx', 'pptx', 'docx', 'pdf']);
 
+/**
+ * A URL is a research target, not a session source id, but the orchestrator model
+ * sometimes passes one in sourceIds (Scenario B turn 1, "https://taplio.com/"): the
+ * source guard then reports it as not found and no research runs at all. URLs move into
+ * the objective, where the Research Agent reads them, and leave the scope.
+ */
+export function moveUrlsIntoObjective(objective: string, sourceIds: string[]): { objective: string; sourceIds: string[] } {
+  const isUrl = (id: string) => /^(https?:\/\/|www\.)/i.test(id.trim());
+  const urls = sourceIds.filter(isUrl).filter((url) => !objective.includes(url.trim()));
+  return {
+    objective: urls.length > 0 ? `${objective} (${urls.map((u) => u.trim()).join(', ')})` : objective,
+    sourceIds: sourceIds.filter((id) => !isUrl(id)),
+  };
+}
+
+/**
+ * The findings an artifact is built from. The orchestrator model sometimes passes the
+ * evidence ids it cited (E198) instead of finding ids (Scenario B turn 3): the workflow
+ * then gathered nothing, and the author, with no evidence to cite, produced a plan the
+ * validator rightly refused. Finding ids are kept, an evidence id stands for every
+ * finding that cites it, and when nothing resolves, every finding in this conversation
+ * is used, which is also the behaviour when no ids are given.
+ */
+export function resolveArtifactFindingIds(requested: string[] | undefined, manifest: SessionManifest): string[] {
+  const all = manifest.findings.map((f) => f.id);
+  if (!requested || requested.length === 0) return all;
+  const wanted = new Set(requested.map((id) => id.trim().toUpperCase()));
+  const resolved = manifest.findings
+    .filter((f) => wanted.has(f.id.toUpperCase()) || f.evidenceIds.some((e) => wanted.has(e.toUpperCase())))
+    .map((f) => f.id);
+  return resolved.length > 0 ? resolved : all;
+}
+
 export const handleRequestTool = createTool({
   id: 'handle_request',
   description:
@@ -947,9 +1127,9 @@ export const handleRequestTool = createTool({
       const sessionId = resolveSessionId(context);
       const store = await getManifestStore();
       const manifest = await store.loadManifest(sessionId);
-      const sourceIds = inputData.sourceIds ?? [];
+      const { objective, sourceIds } = moveUrlsIntoObjective(inputData.objective, inputData.sourceIds ?? []);
 
-      const turn = await runTurn(inputData.objective, sourceIds, manifest);
+      const turn = await runTurn(objective, sourceIds, manifest);
 
       // Rule 6: report gaps, never fill them. Every gap a specialist could not
       // determine this turn is folded into the manifest's open gaps so it stays
@@ -1128,7 +1308,7 @@ export const requestArtifactTool = createTool({
       const sessionId = resolveSessionId(context);
       const store = await getManifestStore();
       const manifest = await store.loadManifest(sessionId);
-      const findingIds = inputData.findingIds ?? manifest.findings.map((f) => f.id);
+      const findingIds = resolveArtifactFindingIds(inputData.findingIds, manifest);
 
       const progressEvents: ProgressEvent[] = [];
       const completedArtifacts: Artifact[] = [];
@@ -1180,10 +1360,13 @@ export const requestArtifactTool = createTool({
               };
             }
 
+            const reason = (result as { error?: { message?: unknown } }).error?.message;
             return {
               status: 'failed' as const,
               title: item.title,
-              message: `Artifact generation did not complete (workflow status: ${result.status}).`,
+              message:
+                `Artifact generation did not complete (workflow status: ${result.status})` +
+                (typeof reason === 'string' && reason ? `: ${reason.slice(0, 500)}` : '.'),
             };
           } catch (err) {
             return { status: 'failed' as const, title: item.title, message: `Unexpected error: ${(err as Error).message}` };
@@ -1271,7 +1454,10 @@ Ten hard rules, in order:
 
 7. Cite finding and evidence ids inline in your answer, for example "email converts at 4.2% [E4]" or "paid
    social is buying volume, not revenue [F2]". This is what makes "how did you get this" mechanical rather than
-   a narrated afterthought.
+   a narrated afterthought. For each headline number, add one plain-language line on how it was worked out,
+   translated from its evidence's "method" (the SQL) and source, for example "Conversion rate = total
+   conversions / total clicks across 1,203 rows of campaigns.xlsx [E4]". Say only what the method or the
+   specialist's answer records; a row count or filter it does not state is left out, never guessed.
 
 8. For any request with more than one part, state a short numbered plan before you start working through it,
    then note progress against that plan as each part completes. handle_request's own "plan" field tells you
@@ -1308,6 +1494,11 @@ Ten hard rules, in order:
     handle_request again in this turn, and do not rephrase and retry: each attempt spends more of the same
     quota. Tell the user plainly that the model providers are rate limited and to try again in a minute.
 
+12. A message that is only a website address, or introduces one ("here is our site: acme.com"), is a request
+    to research that company. Do not ask what to do with it: call handle_request with an objective like
+    "Profile the company at <url>: what it sells, to whom, and how it positions itself", and put the URL in
+    the objective, never in sourceIds (a URL is not a session source id).
+
 Synthesis, not relay: after handle_request returns, do not paste a specialist's raw "answer" text into the
 chat. Read its evidence and gaps, decide what actually matters for the business question asked, order it by
 impact, and write the answer in your own words, citing ids as you go. The specialists produce facts; you
@@ -1333,6 +1524,12 @@ your stated plan and progress narration the same way a multi-specialist delegati
 `.trim(),
   model: MODELS.ANALYST,
   memory: new Memory(),
+  defaultOptions: AGENT_DEFAULT_OPTIONS,
+  // Earlier turns' tool calls and results leave the prompt (D-73): they were most of
+  // each call's 30-40K tokens by turn six, and what they established is already in the
+  // manifest read_session_manifest returns every turn. The current turn's calls stay, and
+  // stored history is untouched, so the UI still shows every tool call.
+  inputProcessors: [new ToolCallFilter()],
   tools: {
     read_session_manifest: readSessionManifestTool,
     resolve_reference: resolveReferenceTool,

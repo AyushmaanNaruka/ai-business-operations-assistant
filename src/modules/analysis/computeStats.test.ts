@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { computeStats } from './computeStats';
+import { computeStats, twoProportionZTest } from './computeStats';
 import { describe as describeTable } from './describe';
 import { detectQualityIssues } from './qualityWarnings';
 import { query } from './query';
@@ -92,6 +92,42 @@ describe('computeStats: tTestTwoSample', () => {
     expect(result.data.nB).toBe(3);
   });
 
+  it('adds Welch df and a two sided p value that match scipy', () => {
+    // scipy.stats.ttest_ind([1,2,3,4,5], [2,4,...,14], equal_var=False):
+    // t = -2.809757, df = 8.037106, p = 0.022747
+    const rows = [
+      ...[1, 2, 3, 4, 5].map((value) => ({ arm: 'A', value })),
+      ...[2, 4, 6, 8, 10, 12, 14].map((value) => ({ arm: 'B', value })),
+    ];
+    const result = computeStats(rows, { kind: 'tTestTwoSample', valueColumn: 'value', groupColumn: 'arm', groupA: 'A', groupB: 'B' });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.data.kind !== 'tTestTwoSample') return;
+    expect(result.data.method).toBe('welch');
+    expect(result.data.t).toBeCloseTo(-2.809757434745082, 8);
+    expect(result.data.df).toBeCloseTo(8.037105751391467, 8);
+    expect(result.data.pValue).toBeCloseTo(0.022747255279670916, 7);
+    expect(result.data.meanA).toBe(3);
+    expect(result.data.meanB).toBe(8);
+  });
+
+  it('gives the equal variance example its p value, and nulls for a one value group', () => {
+    const rows = [10, 12, 14].map((value) => ({ g: 'A', value })).concat([20, 22, 24].map((value) => ({ g: 'B', value })));
+    const result = computeStats(rows, { kind: 'tTestTwoSample', valueColumn: 'value', groupColumn: 'g', groupA: 'A', groupB: 'B' });
+    if (!result.ok || result.data.kind !== 'tTestTwoSample') throw new Error('expected a t test');
+    expect(result.data.df).toBeCloseTo(4, 10);
+    expect(result.data.pValue).toBeCloseTo(0.0036022326091040033, 7);
+
+    const tiny = computeStats(
+      [
+        { g: 'A', value: 1 },
+        { g: 'B', value: 2 },
+        { g: 'B', value: 3 },
+      ],
+      { kind: 'tTestTwoSample', valueColumn: 'value', groupColumn: 'g', groupA: 'A', groupB: 'B' },
+    );
+    expect(tiny).toMatchObject({ ok: true, data: { t: null, df: null, pValue: null, nA: 1, nB: 2 } });
+  });
+
   it('reports NO_DATA when one group has no numeric values', () => {
     const rows = [{ segment: 'A', value: 1 }];
     const result = computeStats(rows, {
@@ -103,6 +139,64 @@ describe('computeStats: tTestTwoSample', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('NO_DATA');
+  });
+});
+
+describe('computeStats: twoProportionZTest', () => {
+  const op = {
+    kind: 'twoProportionZTest' as const,
+    successesColumn: 'conversions',
+    trialsColumn: 'clicks',
+    groupColumn: 'segment',
+    groupA: 'SMB',
+    groupB: 'Enterprise',
+  };
+
+  it('matches the hand computed pooled z test: 45/1000 vs 30/1000', () => {
+    // pooled p = 75/2000 = 0.0375; se = sqrt(0.0375 * 0.9625 * (2/1000)) = 0.0084963
+    // z = 0.015 / 0.0084963 = 1.76547; two sided p = 0.07748 (scipy norm.sf)
+    const direct = twoProportionZTest(45, 1000, 30, 1000);
+    expect(direct.z).toBeCloseTo(1.7654696590094991, 8);
+    expect(direct.pValue).toBeCloseTo(0.0774848651326447, 6);
+    expect(direct.significantAt05).toBe(false);
+    expect(direct.pooledRate).toBeCloseTo(0.0375, 12);
+  });
+
+  it('sums successes and trials per group from row level or pre aggregated rows', () => {
+    const rows = [
+      { segment: 'SMB', clicks: 600, conversions: 25 },
+      { segment: 'SMB', clicks: 400, conversions: 20 },
+      { segment: 'Enterprise', clicks: '1000', conversions: '30' },
+      { segment: 'Other', clicks: 5, conversions: 5 },
+    ];
+    const result = computeStats(rows, op);
+    expect(result).toMatchObject({
+      ok: true,
+      data: { kind: 'twoProportionZTest', successesA: 45, trialsA: 1000, successesB: 30, trialsB: 1000, rateA: 0.045, rateB: 0.03 },
+    });
+    if (result.ok && result.data.kind === 'twoProportionZTest') expect(result.data.z).toBeCloseTo(1.76547, 4);
+  });
+
+  it('calls a large gap on large volumes significant', () => {
+    expect(twoProportionZTest(600, 10000, 450, 10000).significantAt05).toBe(true);
+  });
+
+  it('refuses a group with no trials, and successes above trials', () => {
+    const none = computeStats([{ segment: 'SMB', clicks: 10, conversions: 1 }], op);
+    expect(none).toMatchObject({ ok: false, error: { code: 'NO_DATA' } });
+
+    const bad = computeStats(
+      [
+        { segment: 'SMB', clicks: 10, conversions: 20 },
+        { segment: 'Enterprise', clicks: 10, conversions: 1 },
+      ],
+      op,
+    );
+    expect(bad).toMatchObject({ ok: false, error: { code: 'QUERY_INVALID' } });
+  });
+
+  it('returns null z when there is no variance to test', () => {
+    expect(twoProportionZTest(0, 100, 0, 200)).toMatchObject({ z: null, pValue: null, significantAt05: null });
   });
 });
 

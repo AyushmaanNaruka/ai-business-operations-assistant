@@ -30,5 +30,10 @@ export default defineConfig({
     // afterwards those duplicates run alongside the real ones and collide
     // over the same on-disk DuckDB/LibSQL files.
     exclude: [...configDefaults.exclude, '.claude/**'],
+    // Vitest's 5s default is too tight once every fork loads DuckDB (and its excel
+    // extension) at the same time: DuckDB-heavy tests that take ~1s alone were timing
+    // out under a full parallel run. A test that needs longer still sets its own.
+    testTimeout: 30000,
+    hookTimeout: 30000,
   },
 });

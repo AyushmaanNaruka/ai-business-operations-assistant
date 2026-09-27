@@ -107,6 +107,21 @@ describe('detectType', () => {
       expect(result).toEqual({ ok: true, data: 'pdf' });
     });
 
+    it('identifies .md and .markdown files as text, the same document path as .txt', async () => {
+      for (const name of ['notes.md', 'NOTES.MD', 'readme.markdown']) {
+        const path = join(dir, name);
+        await writeFile(path, '# Q2 plan\n\n- grow EU revenue\n');
+        expect(await detectType(path)).toEqual({ ok: true, data: 'txt' });
+      }
+    });
+
+    it('still trusts magic bytes over a .md extension', async () => {
+      const path = join(dir, 'actually-a-pdf.md');
+      await writeFile(path, Buffer.from('%PDF-1.7\n', 'binary'));
+
+      expect(await detectType(path)).toEqual({ ok: true, data: 'pdf' });
+    });
+
     it('reports an unrecognised extension as UNSUPPORTED_FORMAT rather than guessing', async () => {
       const path = join(dir, 'photo.png');
       await writeFile(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));

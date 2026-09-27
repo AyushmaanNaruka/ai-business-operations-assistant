@@ -101,8 +101,10 @@ type TierName = 'ANALYST' | 'WRITER' | 'ROUTER' | 'RERANK' | 'EMBEDDER';
  */
 const DEFAULT_CHAINS: Record<TierName, string[]> = {
   // Reasoning over evidence: the orchestrator and the three specialists.
+  // Sonnet 5, not Opus 5 (D-73): the Scenario A dry run ran on Sonnet 5 and met the
+  // grounding bar, at 40% of Opus 5's per-token price.
   ANALYST: [
-    'anthropic/claude-opus-5',
+    'anthropic/claude-sonnet-5',
     'openai/gpt-5.5',
     'google/gemini-2.5-flash',
     'google/gemini-3.5-flash-lite',
@@ -110,7 +112,7 @@ const DEFAULT_CHAINS: Record<TierName, string[]> = {
   ],
   // Authoring the one model step in the artifact workflow, where output quality matters most.
   WRITER: [
-    'anthropic/claude-opus-5',
+    'anthropic/claude-sonnet-5',
     'openai/gpt-5.5',
     'google/gemini-2.5-flash',
     'google/gemini-3.5-flash-lite',
@@ -254,6 +256,19 @@ function isGroqJsonStructuredOutputFallbackError(err: unknown): boolean {
  * `object`, surfacing as a PARSE_FAILED gap. Gemini 2.5 Flash usually fits in 5; the
  * fallback models (D-53) retry SQL more and did not, measured live.
  */
+/**
+ * Default call options for every agent (D-73): Anthropic prompt caching. The request
+ * level `cacheControl` becomes Anthropic's automatic caching, so each step of a tool
+ * loop reads the previous step's prefix (instructions, tools, earlier tool results) from
+ * cache at a tenth of the input price instead of paying for it again. Measured before
+ * this, every call in the Scenario A dry run had zero cached tokens and input was about
+ * 80% of the spend. Keyed by provider, so it is inert on OpenAI (which caches
+ * automatically), Gemini and Groq.
+ */
+export const AGENT_DEFAULT_OPTIONS = {
+  providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' as const } } },
+};
+
 export const SPECIALIST_MAX_STEPS = 12;
 export const ORCHESTRATOR_MAX_STEPS = 10;
 

@@ -1,19 +1,52 @@
 import * as ss from 'simple-statistics';
 import type { ToolResult } from '@/types';
 import { fail, ok } from '@/modules/reliability';
+import { normalTwoSidedP, studentTTwoSidedP } from './distributions';
 import type { QueryValue } from './values';
 
 export type StatsOp =
   | { kind: 'linearRegression'; xColumn: string; yColumn: string }
   | { kind: 'correlation'; columnA: string; columnB: string }
   | { kind: 'tTestTwoSample'; valueColumn: string; groupColumn: string; groupA: string; groupB: string }
-  | { kind: 'smallSample'; clicksColumn: string; conversionsColumn: string; labelColumn?: string };
+  | { kind: 'smallSample'; clicksColumn: string; conversionsColumn: string; labelColumn?: string }
+  | {
+      kind: 'twoProportionZTest';
+      successesColumn: string;
+      trialsColumn: string;
+      groupColumn: string;
+      groupA: string;
+      groupB: string;
+    };
 
 export type StatsResult =
   | { kind: 'linearRegression'; slope: number; intercept: number; rSquared: number; n: number }
   | { kind: 'correlation'; r: number; n: number }
-  | { kind: 'tTestTwoSample'; t: number | null; nA: number; nB: number }
-  | { kind: 'smallSample'; rows: SmallSampleRow[] };
+  | {
+      kind: 'tTestTwoSample';
+      method: 'welch';
+      t: number | null;
+      df: number | null;
+      pValue: number | null;
+      meanA: number;
+      meanB: number;
+      nA: number;
+      nB: number;
+    }
+  | { kind: 'smallSample'; rows: SmallSampleRow[] }
+  | ({ kind: 'twoProportionZTest' } & TwoProportionZTest);
+
+export type TwoProportionZTest = {
+  z: number | null;
+  pValue: number | null;
+  significantAt05: boolean | null;
+  rateA: number;
+  rateB: number;
+  pooledRate: number;
+  successesA: number;
+  trialsA: number;
+  successesB: number;
+  trialsB: number;
+};
 
 export type SmallSampleRow = {
   label: string;
@@ -50,6 +83,51 @@ function pairedColumns(rows: Row[], xColumn: string, yColumn: string): [number, 
     if (x !== null && y !== null) pairs.push([x, y]);
   }
   return pairs;
+}
+
+/** A group label matches whether DuckDB returned it as a string or a number. */
+function sameGroup(value: QueryValue | undefined, group: string): boolean {
+  return value !== null && value !== undefined && String(value) === group;
+}
+
+/**
+ * Welch's unequal variance t test: t, Welch-Satterthwaite degrees of freedom and the
+ * two sided p value. With equal group sizes t equals the pooled variance t. t, df and
+ * pValue are null when a group has fewer than two values or both have zero variance.
+ */
+export function welchTTest(sampleA: number[], sampleB: number[]) {
+  const meanA = ss.mean(sampleA);
+  const meanB = ss.mean(sampleB);
+  const base = { method: 'welch' as const, meanA, meanB, nA: sampleA.length, nB: sampleB.length };
+  if (sampleA.length < 2 || sampleB.length < 2) return { ...base, t: null, df: null, pValue: null };
+  const seA = ss.sampleVariance(sampleA) / sampleA.length;
+  const seB = ss.sampleVariance(sampleB) / sampleB.length;
+  if (seA + seB === 0) return { ...base, t: null, df: null, pValue: null };
+  const t = (meanA - meanB) / Math.sqrt(seA + seB);
+  const df = (seA + seB) ** 2 / (seA ** 2 / (sampleA.length - 1) + seB ** 2 / (sampleB.length - 1));
+  return { ...base, t, df, pValue: studentTTwoSidedP(t, df) };
+}
+
+/**
+ * Pooled two proportion z test, the right test for two conversion rates built from
+ * summed conversions over summed clicks. z and pValue are null when the pooled rate
+ * is 0 or 1, where there is no variance to test against.
+ */
+export function twoProportionZTest(
+  successesA: number,
+  trialsA: number,
+  successesB: number,
+  trialsB: number,
+): TwoProportionZTest {
+  const rateA = successesA / trialsA;
+  const rateB = successesB / trialsB;
+  const pooledRate = (successesA + successesB) / (trialsA + trialsB);
+  const variance = pooledRate * (1 - pooledRate) * (1 / trialsA + 1 / trialsB);
+  const base = { rateA, rateB, pooledRate, successesA, trialsA, successesB, trialsB };
+  if (!(variance > 0)) return { ...base, z: null, pValue: null, significantAt05: null };
+  const z = (rateA - rateB) / Math.sqrt(variance);
+  const pValue = normalTwoSidedP(z);
+  return { ...base, z, pValue, significantAt05: pValue < 0.05 };
 }
 
 /**
@@ -93,11 +171,11 @@ export function computeStats(rows: Row[], op: StatsOp): ToolResult<StatsResult> 
 
     case 'tTestTwoSample': {
       const sampleA = numericColumn(
-        rows.filter((row) => row[op.groupColumn] === op.groupA),
+        rows.filter((row) => sameGroup(row[op.groupColumn], op.groupA)),
         op.valueColumn,
       );
       const sampleB = numericColumn(
-        rows.filter((row) => row[op.groupColumn] === op.groupB),
+        rows.filter((row) => sameGroup(row[op.groupColumn], op.groupB)),
         op.valueColumn,
       );
       if (sampleA.length === 0 || sampleB.length === 0) {
@@ -106,8 +184,34 @@ export function computeStats(rows: Row[], op: StatsOp): ToolResult<StatsResult> 
           `Need at least one numeric "${op.valueColumn}" value in each of "${op.groupA}" and "${op.groupB}".`,
         );
       }
-      const t = ss.tTestTwoSample(sampleA, sampleB);
-      return ok({ kind: 'tTestTwoSample', t, nA: sampleA.length, nB: sampleB.length });
+      return ok({ kind: 'tTestTwoSample', ...welchTTest(sampleA, sampleB) });
+    }
+
+    case 'twoProportionZTest': {
+      const totals = (group: string) => {
+        let successes = 0;
+        let trials = 0;
+        for (const row of rows) {
+          if (!sameGroup(row[op.groupColumn], group)) continue;
+          successes += toNumber(row[op.successesColumn]) ?? 0;
+          trials += toNumber(row[op.trialsColumn]) ?? 0;
+        }
+        return { successes, trials };
+      };
+      const a = totals(op.groupA);
+      const b = totals(op.groupB);
+      if (a.trials <= 0 || b.trials <= 0) {
+        return fail('NO_DATA', `Need a positive "${op.trialsColumn}" total in each of "${op.groupA}" and "${op.groupB}".`, {
+          suggestion: 'Check the group labels match the values in the group column exactly.',
+        });
+      }
+      if (a.successes < 0 || b.successes < 0 || a.successes > a.trials || b.successes > b.trials) {
+        return fail(
+          'QUERY_INVALID',
+          `"${op.successesColumn}" must be between 0 and "${op.trialsColumn}" in each group, e.g. conversions and clicks.`,
+        );
+      }
+      return ok({ kind: 'twoProportionZTest', ...twoProportionZTest(a.successes, a.trials, b.successes, b.trials) });
     }
 
     case 'smallSample': {

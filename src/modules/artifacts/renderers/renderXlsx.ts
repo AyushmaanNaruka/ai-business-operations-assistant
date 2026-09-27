@@ -3,6 +3,10 @@ import QuickChart from 'quickchart-js';
 import type { WorkbookPlan } from '@/modules/artifacts/schemas/workbook';
 import type { ChartSpec } from '@/modules/artifacts/schemas/common';
 import type { Evidence } from '@/types/evidence';
+import { dataSheetHeaders, dataSheetShape, resolveFormula, type DataSheetShape } from '../formulas';
+
+// Re-exported so callers that already import the layout description from here keep working.
+export { describeDataSheetLayout } from '../formulas';
 
 /**
  * P6.3, skills/excel-workbook/SKILL.md. Renders a validated `WorkbookPlan` plus the
@@ -21,15 +25,21 @@ import type { Evidence } from '@/types/evidence';
  * `plan.sources`, which is already the authored, validated projection of that ledger.
  * Re-deriving it from `evidence` here would just be re-doing validation this module is
  * not responsible for.
+ *
+ * The "Generated" date is stamped here from the clock at render time (`options.now`,
+ * injectable for tests), never taken from the plan: a model has no reliable idea what
+ * today is, and a workbook once shipped "Generated: 2024-05-13" because it guessed.
  */
 export async function renderXlsx(
   plan: WorkbookPlan,
   dataRows: Record<string, unknown>[],
   // Not read: part of the module's fixed contract; see doc comment above for why.
   evidence: Evidence[],
+  options: { now?: Date } = {},
 ): Promise<Buffer> {
+  const now = options.now ?? new Date();
   const workbook = new ExcelJS.Workbook();
-  workbook.created = new Date();
+  workbook.created = now;
 
   const summarySheet = workbook.addWorksheet('Summary');
   const recommendationsSheet = workbook.addWorksheet('Recommendations');
@@ -37,10 +47,10 @@ export async function renderXlsx(
   const calculationsSheet = workbook.addWorksheet('Calculations');
   const sourcesSheet = workbook.addWorksheet('Sources');
 
-  await buildSummarySheet(workbook, summarySheet, plan);
+  await buildSummarySheet(workbook, summarySheet, plan, now);
   buildRecommendationsSheet(recommendationsSheet, plan);
   buildDataSheet(dataSheet, dataRows);
-  buildCalculationsSheet(calculationsSheet, plan);
+  buildCalculationsSheet(calculationsSheet, plan, dataSheetShape(dataRows));
   buildSourcesSheet(sourcesSheet, plan);
 
   for (const sheet of [summarySheet, recommendationsSheet, dataSheet, calculationsSheet, sourcesSheet]) {
@@ -61,9 +71,9 @@ export async function renderXlsx(
  * range the data covers, and the date the workbook was generated, so they never have to
  * ask what this is or how current it is. `preparedFor` and `dateRange` are optional on
  * the schema; when absent, their header line is simply skipped rather than printed
- * blank.
+ * blank. The generated date is the render date, never an authored value.
  */
-async function buildSummarySheet(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet, plan: WorkbookPlan): Promise<void> {
+async function buildSummarySheet(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet, plan: WorkbookPlan, now: Date): Promise<void> {
   let row = 1;
 
   const titleCell = sheet.getCell(row, 1);
@@ -79,7 +89,7 @@ async function buildSummarySheet(workbook: ExcelJS.Workbook, sheet: ExcelJS.Work
     sheet.getCell(row, 1).value = `Date range: ${plan.dateRange}`;
     row += 1;
   }
-  sheet.getCell(row, 1).value = `Generated: ${plan.generatedAt}`;
+  sheet.getCell(row, 1).value = `Generated: ${now.toISOString().slice(0, 10)}`;
   row += 1;
 
   row += 1; // spacer
@@ -96,6 +106,7 @@ async function buildSummarySheet(workbook: ExcelJS.Workbook, sheet: ExcelJS.Work
     if (typeof stat.value === 'number') {
       const format = classifyHeadlineFormat(stat.label);
       if (format === 'percent') valueCell.numFmt = '0.0%';
+      else if (format === 'ratio') valueCell.numFmt = '0.00"x"';
       else if (format === 'currency') valueCell.numFmt = '$#,##0.00';
     }
     row += 1;
@@ -140,19 +151,25 @@ async function buildSummarySheet(workbook: ExcelJS.Workbook, sheet: ExcelJS.Work
   });
 }
 
-type HeadlineFormat = 'percent' | 'currency' | 'number';
+export type HeadlineFormat = 'percent' | 'ratio' | 'currency' | 'number';
 
-const PERCENT_LABEL_SIGNALS = ['rate', '%', 'ctr', 'cvr', 'roas'];
+// ROAS is revenue per unit of spend (3.76 means $3.76 back per $1), a multiple, not a
+// share: formatting it as a percent turned 37.6 into "3760%". Checked first, because a
+// label like "ROAS (revenue / spend)" also carries currency signals.
+const RATIO_LABEL_SIGNALS = ['roas', 'return on ad spend', 'multiple'];
+const PERCENT_LABEL_SIGNALS = ['rate', '%', 'ctr', 'cvr'];
 const CURRENCY_LABEL_SIGNALS = ['spend', 'revenue', 'cpa', 'cpc', 'aov', '$'];
 
 /**
  * Decides how a headline number should be formatted purely from its label text, never
  * from its magnitude (a 4.2 could be "4.2%" or "$4.20"; the label is the only reliable
  * signal). A label matching a percent signal is assumed to already carry its decimal
- * form (0.042, not 4.2), which is how this system's evidence values are produced.
+ * form (0.042, not 4.2), which is how this system's evidence values are produced. A
+ * ratio (ROAS) is shown as a multiple, "3.76x".
  */
-function classifyHeadlineFormat(label: string): HeadlineFormat {
+export function classifyHeadlineFormat(label: string): HeadlineFormat {
   const lower = label.toLowerCase();
+  if (RATIO_LABEL_SIGNALS.some((signal) => lower.includes(signal))) return 'ratio';
   if (PERCENT_LABEL_SIGNALS.some((signal) => lower.includes(signal))) return 'percent';
   if (CURRENCY_LABEL_SIGNALS.some((signal) => lower.includes(signal))) return 'currency';
   return 'number';
@@ -278,20 +295,12 @@ function buildRecommendationsSheet(sheet: ExcelJS.Worksheet, plan: WorkbookPlan)
 /**
  * skills/excel-workbook, "Data" sheet: the underlying rows, exactly as gathered, never
  * invented or reshaped. Headers are the union of keys across all rows (order of first
- * appearance), so a sparse row never loses a column another row defines. Frozen header
- * row and a full-range autofilter, per the skill and P6.3.
+ * appearance, `dataSheetHeaders` in ../formulas), so a sparse row never loses a column
+ * another row defines. Frozen header row and a full-range autofilter, per the skill and
+ * P6.3.
  */
 function buildDataSheet(sheet: ExcelJS.Worksheet, dataRows: Record<string, unknown>[]): void {
-  const headers: string[] = [];
-  const seen = new Set<string>();
-  for (const row of dataRows) {
-    for (const key of Object.keys(row)) {
-      if (!seen.has(key)) {
-        seen.add(key);
-        headers.push(key);
-      }
-    }
-  }
+  const headers = dataSheetHeaders(dataRows);
 
   sheet.columns = headers.map((header) => ({ header, key: header }));
   sheet.getRow(1).font = { bold: true };
@@ -321,8 +330,13 @@ function buildDataSheet(sheet: ExcelJS.Worksheet, dataRows: Record<string, unkno
  * WITHOUT that leading "=", so it is stripped here before assigning. Leaving `result`
  * unset is fine and intentional: Excel computes the value itself on open, this module
  * has no formula engine of its own.
+ *
+ * Every formula passes through `resolveFormula` (../formulas) against the Data sheet
+ * this renderer just wrote, so a whole-column reference by name (`Data!revenue`) lands
+ * as the exact A1 range that column occupies, never as a name Excel cannot resolve.
+ * `validatePlan` has already rejected anything that cannot be resolved.
  */
-function buildCalculationsSheet(sheet: ExcelJS.Worksheet, plan: WorkbookPlan): void {
+function buildCalculationsSheet(sheet: ExcelJS.Worksheet, plan: WorkbookPlan, shape: DataSheetShape): void {
   sheet.columns = [
     { header: 'Label', key: 'label' },
     { header: 'Formula', key: 'formula' },
@@ -335,7 +349,7 @@ function buildCalculationsSheet(sheet: ExcelJS.Worksheet, plan: WorkbookPlan): v
       label: calculation.label,
       evidence: calculation.evidenceIds.join(', '),
     });
-    newRow.getCell('formula').value = { formula: calculation.formula.slice(1) };
+    newRow.getCell('formula').value = { formula: resolveFormula(calculation.formula, shape).formula.slice(1) };
   }
 }
 

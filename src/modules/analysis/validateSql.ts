@@ -137,6 +137,15 @@ function scan(sql: string): { codeText: string; statementCount: number; untermin
 }
 
 /**
+ * The SQL with string literals, quoted identifiers and comments blanked to
+ * spaces, same length as the input, so other lints (ratioLint) can run
+ * pattern checks on code only, never on a campaign name or a comment.
+ */
+export function sqlCodeText(sql: string): string {
+  return scan(sql).codeText;
+}
+
+/**
  * Validates a single read only SQL statement before it ever reaches DuckDB.
  * Rejects anything but exactly one SELECT or WITH statement, all DDL/DML,
  * and direct filesystem read functions. Never throws. (docs/04-MODULES.md M2)

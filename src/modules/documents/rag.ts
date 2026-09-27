@@ -288,17 +288,37 @@ function toPassage(result: RerankResult): Passage {
 }
 
 /**
+ * Which chunks a `search()` may return. `sourceId` narrows to one document;
+ * `sourceIds` narrows to a set (a conversation's own sources, since the vector
+ * index is shared by every conversation the process serves). Both set means a
+ * chunk must satisfy both. An empty `sourceIds` allows nothing.
+ */
+export type SearchFilter = { sourceId?: string; sourceIds?: readonly string[] };
+
+/**
  * Retrieves the four passages most relevant to `query` from the indexed
  * store, per docs/04-MODULES.md M3: vector search (topK 10) then a rerank
  * pass down to 4. Filtering by `sourceId` is what keeps attribution honest
  * once more than one document is indexed (docs/03-ARCHITECTURE.md Part 2.5)
- * instead of quietly searching every source at once.
+ * instead of quietly searching every source at once. The filter is applied in
+ * the vector query itself (LibSQLVector takes a metadata filter with `$in`), so
+ * a scoped search still gets its full topK from the allowed sources rather than
+ * a post filtered remainder.
  */
-export async function search(query: string, filter?: { sourceId?: string }): Promise<ToolResult<Passage[]>> {
+export async function search(query: string, filter?: SearchFilter): Promise<ToolResult<Passage[]>> {
+  const allowed = filter?.sourceIds;
+  if (allowed && (allowed.length === 0 || (filter?.sourceId !== undefined && !allowed.includes(filter.sourceId)))) {
+    return ok([]);
+  }
+
   let sources: QueryResult[];
   try {
     const tool = getQueryTool();
-    const filterValue = filter?.sourceId ? { sourceId: filter.sourceId } : {};
+    const filterValue = filter?.sourceId
+      ? { sourceId: filter.sourceId }
+      : allowed
+        ? { sourceId: { $in: [...allowed] } }
+        : {};
     // The tool's execute() is normally only ever called by the agent/tool
     // runtime, which always supplies requestContext and observe; called
     // directly here (no agent involved, per docs/03-ARCHITECTURE.md's "the

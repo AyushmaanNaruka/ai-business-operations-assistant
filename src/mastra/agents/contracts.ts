@@ -1,9 +1,11 @@
 import { Agent } from '@mastra/core/agent';
+import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 import type { SpecialistResult, SpecialistTask } from '@/types/contracts';
 import type { ErrorCode, ToolFailure } from '@/types/toolResult';
 import type { Evidence, EvidenceKind, MetricKey } from '@/types/evidence';
-import { generateStructuredOutput, MODELS, SPECIALIST_MAX_STEPS } from '../models';
+import { AGENT_DEFAULT_OPTIONS, generateStructuredOutput, MODELS, SPECIALIST_MAX_STEPS } from '../models';
+import { SOURCE_SCOPE_KEY } from '../tools/scope';
 
 /**
  * docs/03-ARCHITECTURE.md section 3.2, "The delegation contract": specialists never
@@ -154,7 +156,13 @@ export async function delegate(agent: Agent, task: SpecialistTask, deps: Delegat
     JSON.stringify(validatedTask),
   ].join('\n');
 
-  const run = (await agent.generate(prompt, { maxSteps: SPECIALIST_MAX_STEPS })) as unknown as SpecialistRun;
+  // The task's sources are the only ones its tools may read (D-72): one process holds
+  // every conversation's files, and without this a specialist could list, read or query
+  // another user's uploads.
+  const requestContext = new RequestContext();
+  requestContext.set(SOURCE_SCOPE_KEY, validatedTask.sourceIds);
+
+  const run = (await agent.generate(prompt, { maxSteps: SPECIALIST_MAX_STEPS, requestContext })) as unknown as SpecialistRun;
 
   const finalText = (run.steps?.at(-1)?.text?.trim() || run.text?.trim()) ?? '';
   if (!finalText) {
@@ -238,6 +246,7 @@ async function extractGapsWithModel(answerText: string, objective: string): Prom
       '(e.g. "Customer lifetime value (CLV) cannot be computed: ..."). List only what the answer itself states. ' +
       'If it states none, return an empty list.',
     model: MODELS.ROUTER,
+    defaultOptions: AGENT_DEFAULT_OPTIONS,
   });
   const prompt = `Question: ${objective}\n\nAnswer:\n${answerText}`;
   const output = await generateStructuredOutput(gapExtractor, prompt, GapsSchema);

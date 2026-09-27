@@ -9,7 +9,7 @@ import { describe, it } from 'vitest';
 import '@/mastra';
 import { buildTask, delegate } from '@/mastra/agents/contracts';
 import { dataAnalyst } from '@/mastra/agents/dataAnalyst';
-import { missingMetricScorer, runAndAssert } from './scorers';
+import { missingMetricScorer, runAndAssert, sampleSourceIds } from './scorers';
 
 /**
  * Grounding eval 1/4 (docs/09-TESTING.md section 3, docs/03-ARCHITECTURE.md Part 10
@@ -31,7 +31,7 @@ describe('Grounding eval: missing metric', () => {
     async () => {
       const task = buildTask(
         'What is our average customer lifetime value (CLV)?',
-        [],
+        await sampleSourceIds('campaigns.xlsx'),
         [],
         'a grounded, evidence-cited answer computed from the relevant tables, or an honest reported gap if the figure cannot be computed from what is loaded',
       );

@@ -47,6 +47,8 @@ describe('Grounding eval: research disabled', () => {
     async () => {
       const task = buildTask(
         'Research Acme Corp: what do they sell, who do they target, and how do they price?',
+        // Empty on purpose: the research tools read the public web, not session sources,
+        // and do not check the source scope, so there is nothing to name here.
         [],
         [],
         'a grounded, evidence-cited profile sourced from pages actually read on the public web, or an honest reported gap if research cannot be reached',

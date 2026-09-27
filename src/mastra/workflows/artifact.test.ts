@@ -3,6 +3,7 @@ import type { Artifact, Evidence, Finding } from '@/types';
 import type { ArtifactStore } from '@/modules/artifacts/store';
 import type { EvidenceLedger } from '@/modules/evidence';
 import { buildArtifactWorkflow } from './artifact';
+import { NOTHING_GATHERED_MESSAGE } from './artifactSteps';
 
 /**
  * Graph-level tests for the artifact workflow. Lighter than artifactSteps.test.ts on
@@ -197,6 +198,93 @@ describe('artifact workflow (graph level)', () => {
     // No file was rendered and no artifact was ever saved for this run.
     expect(renderArtifactFileFn).not.toHaveBeenCalled();
     expect(storeArtifactFileFn).not.toHaveBeenCalled();
+  });
+
+  it('declines a request with nothing gathered before any model call: suspends with the user-facing reason, renders and stores nothing', async () => {
+    const authorAndValidateFn = vi.fn();
+    const renderArtifactFileFn = vi.fn();
+    const storeArtifactFileFn = vi.fn();
+    const emptyLedger: Pick<EvidenceLedger, 'getFindings' | 'getEvidence'> = {
+      getFindings: vi.fn().mockResolvedValue([]),
+      getEvidence: vi.fn().mockResolvedValue([]),
+    };
+
+    const workflow = buildArtifactWorkflow({
+      getLedger: async () => emptyLedger,
+      getStore: async () => ({ saveVersion: vi.fn() }) as unknown as Pick<ArtifactStore, 'saveVersion'>,
+      loadSkill: async () => 'SKILL TEXT',
+      authorAndValidateFn,
+      renderChartsPrecheckFn: async () => ({ ok: true }),
+      renderArtifactFileFn,
+      storeArtifactFileFn,
+    });
+
+    const run = await workflow.createRun();
+    const result = await run.start({
+      inputData: { ...baseInput, planKind: 'deck' as const, title: 'Untitled session deck', findingIds: [], dataRows: [] },
+    });
+
+    expect(result.status).toBe('suspended');
+    if (result.status === 'suspended') {
+      // The exact namespace request_artifact (orchestrator.ts) reads and relays.
+      const payload = result.suspendPayload as { authorAndValidate?: { errors?: string[] } };
+      expect(payload.authorAndValidate?.errors).toEqual([NOTHING_GATHERED_MESSAGE]);
+    }
+    expect(authorAndValidateFn).not.toHaveBeenCalled();
+    expect(renderArtifactFileFn).not.toHaveBeenCalled();
+    expect(storeArtifactFileFn).not.toHaveBeenCalled();
+  });
+
+  it('declines a workbook whose Data rows resolve empty, with the reason, before any model call', async () => {
+    const authorAndValidateFn = vi.fn();
+    const renderArtifactFileFn = vi.fn();
+    const workflow = buildArtifactWorkflow({
+      getLedger: async () => fakeLedger,
+      getStore: async () => ({ saveVersion: vi.fn() }) as unknown as Pick<ArtifactStore, 'saveVersion'>,
+      getWorkbookDataRowsDeps: async () => ({ getSource: () => undefined, query: vi.fn() }),
+      loadSkill: async () => 'SKILL TEXT',
+      authorAndValidateFn,
+      renderChartsPrecheckFn: async () => ({ ok: true }),
+      renderArtifactFileFn,
+      storeArtifactFileFn: vi.fn(),
+    });
+
+    const run = await workflow.createRun();
+    const result = await run.start({ inputData: { ...baseInput, planKind: 'workbook' as const, title: 'Metrics Workbook' } });
+
+    expect(result.status).toBe('suspended');
+    if (result.status === 'suspended') {
+      const errors = (result.suspendPayload as { authorAndValidate?: { errors?: string[] } }).authorAndValidate?.errors ?? [];
+      expect(errors[0]).toContain('A workbook needs the underlying data rows');
+      expect(errors[0]).toContain('no longer loaded');
+    }
+    expect(authorAndValidateFn).not.toHaveBeenCalled();
+    expect(renderArtifactFileFn).not.toHaveBeenCalled();
+  });
+
+  it('hands a workbook run the real Data sheet shape so validation checks formulas against it', async () => {
+    const rows = [{ channel: 'Email', revenue: 100 }];
+    const authorAndValidateFn = vi.fn().mockResolvedValue({ ok: true, plan: { title: 'A valid plan' } });
+    const workflow = buildArtifactWorkflow({
+      getLedger: async () => fakeLedger,
+      getStore: async () => ({ saveVersion: vi.fn() }) as unknown as Pick<ArtifactStore, 'saveVersion'>,
+      getWorkbookDataRowsDeps: async () => ({
+        getSource: () => ({ tables: [{ tableName: 'campaigns' }] }),
+        query: vi.fn().mockResolvedValue({ ok: true, data: { rows } }),
+      }),
+      loadSkill: async () => 'SKILL TEXT',
+      authorAndValidateFn,
+      renderChartsPrecheckFn: async () => ({ ok: true }),
+      renderArtifactFileFn: vi.fn().mockResolvedValue({ buffer: Buffer.from('xlsx bytes') }),
+      storeArtifactFileFn: vi.fn().mockResolvedValue(fakeArtifact({ kind: 'xlsx', skillUsed: 'excel-workbook' })),
+    });
+
+    const run = await workflow.createRun();
+    await run.start({ inputData: { ...baseInput, planKind: 'workbook' as const, title: 'Metrics Workbook' } });
+
+    const params = authorAndValidateFn.mock.calls[0]![0] as { dataSheet?: unknown; dataLayout?: string };
+    expect(params.dataSheet).toEqual({ headers: ['channel', 'revenue'], rowCount: 1 });
+    expect(params.dataLayout).toContain('A = channel, B = revenue');
   });
 
   it('a revision run (revisionOf set) produces version 2 under the same artifact id', async () => {

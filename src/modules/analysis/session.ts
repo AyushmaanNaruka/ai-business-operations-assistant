@@ -40,16 +40,37 @@ export async function disableExternalAccess(session: DuckDBSession): Promise<voi
   session.locked = true;
 }
 
-const READERS: Record<string, (escapedPath: string) => string> = {
+/**
+ * Which part of a workbook to read. Unset reads the first sheet from its first
+ * non-empty row, exactly as the excel extension's replacement scan does. `sheet`
+ * names another sheet; `range` (e.g. "A3:F120") pins the header row and the data
+ * block when a sheet has a title above its header. Ignored for non-xlsx files.
+ */
+export type RegisterFileOptions = { sheet?: string; range?: string };
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+const READERS: Record<string, (escapedPath: string, options: RegisterFileOptions) => string> = {
   '.csv': (p) => `read_csv_auto('${p}')`,
   '.json': (p) => `read_json_auto('${p}')`,
-  '.xlsx': (p) => `'${p}'`, // the excel extension's replacement scan handles this directly
+  '.xlsx': (p, { sheet, range }) => {
+    // the excel extension's replacement scan handles the default case directly
+    if (sheet === undefined && range === undefined) return `'${p}'`;
+    const args = [`'${p}'`];
+    if (sheet !== undefined) args.push(`sheet = ${sqlString(sheet)}`);
+    if (range !== undefined) args.push(`range = ${sqlString(range)}`, 'header = true');
+    return `read_xlsx(${args.join(', ')})`;
+  },
   '.parquet': (p) => `'${p}'`,
 };
 
 /**
  * Registers a CSV, XLSX, JSON or Parquet file as a DuckDB table using DuckDB's
- * own readers rather than parsing it in Node (docs/04-MODULES.md M2).
+ * own readers rather than parsing it in Node (docs/04-MODULES.md M2). One call
+ * registers one table: a workbook with several sheets is registered one sheet
+ * per call, through `options.sheet`.
  * Internal ingestion plumbing only: never exposed to the agent, which only
  * ever sees table names already registered here.
  *
@@ -62,6 +83,7 @@ export async function registerFile(
   session: DuckDBSession,
   path: string,
   tableName: string,
+  options: RegisterFileOptions = {},
 ): Promise<ToolResult<TableRef>> {
   const ext = extname(path).toLowerCase();
   const reader = READERS[ext];
@@ -80,7 +102,7 @@ export async function registerFile(
   try {
     loader = await DuckDBInstance.create(':memory:');
     loaderConnection = await loader.connect();
-    await loaderConnection.run(`CREATE TABLE staged AS SELECT * FROM ${reader(escapedPath)}`);
+    await loaderConnection.run(`CREATE TABLE staged AS SELECT * FROM ${reader(escapedPath, options)}`);
 
     const described = await loaderConnection.runAndReadAll('DESCRIBE staged');
     const columnDefs = (described.getRowObjectsJson() as Record<string, string>[])

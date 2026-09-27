@@ -3,6 +3,7 @@ import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import type { Artifact, ArtifactKind, Evidence, Finding } from '@/types';
 import { ArtifactPlanKindSchema } from '@/modules/artifacts/schemas';
+import { dataSheetShape, describeDataSheetLayout } from '@/modules/artifacts/formulas';
 import { openArtifactStore, type ArtifactStore } from '@/modules/artifacts/store';
 import { openLedger, type EvidenceLedger } from '@/modules/evidence';
 import { query } from '@/modules/analysis';
@@ -10,12 +11,13 @@ import { EvidenceSchema } from '../agents/contracts';
 import { getRuntime } from '../runtime';
 import {
   authorAndValidate,
+  checkArtifactReadiness,
   gatherEvidenceForArtifact,
   loadSkillText,
   renderArtifactFile,
   renderChartsPrecheck,
   resolveFormat,
-  resolveWorkbookDataRows,
+  resolveWorkbookData,
   storeArtifactFile,
   type WorkbookDataRowsDeps,
 } from './artifactSteps';
@@ -99,7 +101,15 @@ async function getEvidenceLedgerForWorkflow(): Promise<EvidenceLedger> {
 async function getLiveWorkbookDataRowsDeps(): Promise<WorkbookDataRowsDeps> {
   const { session, registry } = await getRuntime();
   return {
-    getSource: (sourceId) => registry.getSource(sourceId),
+    // Evidence recorded before record_evidence resolved its owning source carries the
+    // table name as its sourceId; accept that too, but only for a table a registered
+    // source actually owns, so the id never reaches SQL unvetted.
+    getSource: (sourceId) => {
+      const source = registry.getSource(sourceId);
+      if (source) return source;
+      const ownsTable = registry.listSources().some((s) => s.tables?.some((t) => t.tableName === sourceId));
+      return ownsTable ? { tables: [{ tableName: sourceId }] } : undefined;
+    },
     query: (sql) => query(session, sql),
   };
 }
@@ -170,6 +180,8 @@ const afterResolveKindSchema = workflowInputSchema.extend({ format: ArtifactKind
 const afterGatherEvidenceSchema = afterResolveKindSchema.extend({
   findings: z.array(FindingSchema),
   evidence: z.array(EvidenceSchema),
+  // Why a workbook's Data rows resolved empty; read by checkArtifactReadiness.
+  dataGap: z.string().optional(),
 });
 const afterLoadSkillSchema = afterGatherEvidenceSchema.extend({ skillText: z.string() });
 const afterAuthorSchema = afterLoadSkillSchema.extend({ plan: z.unknown() });
@@ -246,11 +258,19 @@ export function buildArtifactWorkflow(deps: ArtifactWorkflowDeps = {}) {
       // xlsx renderer's Data sheet uses them, so this only resolves them when the
       // caller left dataRows empty and the target format is xlsx; a caller that already
       // supplied rows (e.g. a future direct caller, or a test) is never overridden.
-      const dataRows =
-        inputData.format === 'xlsx' && inputData.dataRows.length === 0
-          ? await resolveWorkbookDataRows(evidence, await getWorkbookDataRowsDeps())
-          : inputData.dataRows;
-      return { ...inputData, findings, evidence, dataRows };
+      // With nothing gathered there is no source to read rows from, so the resolver is
+      // skipped and checkArtifactReadiness declines the run instead.
+      const resolved =
+        inputData.format === 'xlsx' && inputData.dataRows.length === 0 && evidence.length > 0
+          ? await resolveWorkbookData(evidence, await getWorkbookDataRowsDeps())
+          : { rows: inputData.dataRows };
+      return {
+        ...inputData,
+        findings,
+        evidence,
+        dataRows: resolved.rows,
+        ...(resolved.gap ? { dataGap: resolved.gap } : {}),
+      };
     },
   });
 
@@ -270,12 +290,32 @@ export function buildArtifactWorkflow(deps: ArtifactWorkflowDeps = {}) {
     outputSchema: afterAuthorSchema,
     suspendSchema: authorSuspendSchema,
     execute: async ({ inputData, suspend }) => {
+      // Deterministic preconditions first, before the one model call: a request with
+      // nothing gathered (or a workbook with no Data rows) is declined here at zero
+      // model cost. It suspends from THIS step on purpose, with the same
+      // { errors, lastPlan } payload a validation failure uses, because
+      // request_artifact (orchestrator.ts) reads suspendPayload.authorAndValidate.errors
+      // and relays them verbatim; a separate precheck step would namespace the payload
+      // under its own id and the user would see no reason at all.
+      const notReady = checkArtifactReadiness({
+        planKind: inputData.planKind,
+        findings: inputData.findings,
+        dataRows: inputData.dataRows,
+        ...(inputData.dataGap ? { dataGap: inputData.dataGap } : {}),
+      });
+      if (notReady.length > 0) {
+        return await suspend({ errors: notReady, lastPlan: null });
+      }
+
       const result = await runAuthorAndValidate({
         skillText: inputData.skillText,
         planKind: inputData.planKind,
         objective: inputData.objective,
         findings: inputData.findings,
         evidence: inputData.evidence,
+        ...(inputData.planKind === 'workbook'
+          ? { dataLayout: describeDataSheetLayout(inputData.dataRows), dataSheet: dataSheetShape(inputData.dataRows) }
+          : {}),
       });
 
       if (!result.ok) {

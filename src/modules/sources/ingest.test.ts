@@ -1,6 +1,16 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { query, closeSession, createSession, type DuckDBSession } from '@/modules/analysis';
+import ExcelJS from 'exceljs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  query,
+  closeSession,
+  createSession,
+  referencedTables,
+  scopeViolations,
+  type DuckDBSession,
+} from '@/modules/analysis';
 import { getDocument } from '@/modules/documents';
 import * as research from '@/modules/research';
 import * as contentHash from './contentHash';
@@ -11,7 +21,9 @@ import type { Source } from '@/types';
 const SAMPLES = join(import.meta.dirname, '..', '..', '..', 'samples');
 const FIXTURES = join(import.meta.dirname, '__fixtures__');
 
-async function waitForStatus(registry: SourceRegistry, id: string, timeoutMs = 5000): Promise<Source> {
+// Generous by default: DuckDB loads and the excel extension slow down a lot when the
+// whole suite runs in parallel forks, and a tight wait here was the usual flake.
+async function waitForStatus(registry: SourceRegistry, id: string, timeoutMs = 30000): Promise<Source> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const source = registry.getSource(id);
@@ -110,6 +122,115 @@ describe('ingest (tabular)', () => {
   });
 });
 
+// One server process holds one DuckDB session for every user, so two
+// different files with the same name must each get a table of their own.
+describe('ingest (same file name, different content)', () => {
+  let session: DuckDBSession;
+  let registry: SourceRegistry;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ingest-samename-'));
+  });
+
+  afterEach(async () => {
+    if (session) closeSession(session);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** A csv whose basename maps to the table name "campaigns", like samples/campaigns.xlsx does. */
+  async function writeOtherCampaigns(rowCount: number): Promise<string> {
+    const path = join(dir, 'campaigns.csv');
+    const rows = Array.from({ length: rowCount }, (_, i) => `other_${i + 1},${(i + 1) * 10}`);
+    await writeFile(path, ['campaign,spend', ...rows].join('\n'));
+    return path;
+  }
+
+  async function countRows(tableName: string): Promise<number> {
+    const result = await query(session, `SELECT COUNT(*) AS n FROM "${tableName}"`);
+    expect(result.ok).toBe(true);
+    return result.ok ? Number(result.data.rows[0]!.n) : -1;
+  }
+
+  it('the first keeps the plain name, the second gets its source id suffix, and each table holds its own rows', async () => {
+    session = await createSession('same1');
+    registry = createSourceRegistry();
+
+    const first = ingest(session, registry, { path: join(SAMPLES, 'campaigns.xlsx') });
+    const firstReady = await waitForStatus(registry, first.id);
+
+    const second = ingest(session, registry, { path: await writeOtherCampaigns(3) });
+    const secondReady = await waitForStatus(registry, second.id);
+
+    expect(firstReady.status).toBe('ready');
+    expect(secondReady.status).toBe('ready');
+    expect(firstReady.tables![0]!.tableName).toBe('campaigns');
+    expect(secondReady.tables![0]!.tableName).toBe('campaigns_2');
+
+    expect(secondReady.tables![0]!.rowCount).toBe(3);
+    expect(firstReady.tables![0]!.rowCount).not.toBe(3);
+    expect(await countRows('campaigns')).toBe(firstReady.tables![0]!.rowCount);
+    expect(await countRows('campaigns_2')).toBe(3);
+  });
+
+  it('two same-name uploads started at once both become ready under different table names', async () => {
+    session = await createSession('same2');
+    registry = createSourceRegistry();
+
+    const otherPath = await writeOtherCampaigns(4);
+    const a = ingest(session, registry, { path: join(SAMPLES, 'campaigns.xlsx') });
+    const b = ingest(session, registry, { path: otherPath });
+    const [aReady, bReady] = await Promise.all([waitForStatus(registry, a.id), waitForStatus(registry, b.id)]);
+
+    expect(aReady.status).toBe('ready');
+    expect(bReady.status).toBe('ready');
+    const names = [aReady.tables![0]!.tableName, bReady.tables![0]!.tableName];
+    expect(new Set(names).size).toBe(2);
+    expect(names).toContain('campaigns');
+    expect(await countRows(bReady.tables![0]!.tableName)).toBe(4);
+  });
+
+  it('retries under the id-derived name when DuckDB already has the table but no source in the registry owns it', async () => {
+    session = await createSession('same3');
+    registry = createSourceRegistry();
+    // Stands in for the race: another upload created "campaigns" but is not yet listed with its tables.
+    await session.connection.run('CREATE TABLE "campaigns" (x INTEGER)');
+
+    const source = ingest(session, registry, { path: await writeOtherCampaigns(2) });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('ready');
+    expect(finished.tables![0]!.tableName).toBe('campaigns_1');
+    expect(await countRows('campaigns_1')).toBe(2);
+  });
+
+  it('a different document with the same name gets id-derived names for all of its extracted tables', async () => {
+    session = await createSession('same4');
+    registry = createSourceRegistry();
+
+    const first = ingest(session, registry, { path: join(SAMPLES, 'northwind-brief.pdf') });
+    const firstReady = await waitForStatus(registry, first.id, 30000);
+
+    // Same bytes plus a trailing comment after %%EOF: a genuinely different
+    // file (new content hash, so no reuse) that still parses to the same tables.
+    const otherPath = join(dir, 'northwind-brief.pdf');
+    const original = await readFile(join(SAMPLES, 'northwind-brief.pdf'));
+    await writeFile(otherPath, Buffer.concat([original, Buffer.from('\n% a different upload\n')]));
+    const second = ingest(session, registry, { path: otherPath });
+    const secondReady = await waitForStatus(registry, second.id, 30000);
+
+    expect(firstReady.status).toBe('ready');
+    expect(secondReady.status).toBe('ready');
+    const firstNames = firstReady.tables!.map((t) => t.tableName);
+    const secondNames = secondReady.tables!.map((t) => t.tableName);
+    expect(firstNames[0]).toBe('northwind_brief_t1');
+    expect(secondNames).toEqual(firstNames.map((_, i) => `northwind_brief_2_t${i + 1}`));
+    for (const table of secondReady.tables!) {
+      expect(await countRows(table.tableName)).toBe(table.rowCount);
+    }
+  }, 60000);
+});
+
 describe('ingest (document)', () => {
   let session: DuckDBSession;
   let registry: SourceRegistry;
@@ -148,6 +269,24 @@ describe('ingest (document)', () => {
       expect(doc.data).toContain('Northwind Analytics builds a product analytics platform');
     }
   });
+
+  it('an identical re-upload of a document is readable under its own new id, not only the first one', async () => {
+    session = await createSession('ingdoc2');
+    registry = createSourceRegistry();
+
+    const first = ingest(session, registry, { path: join(SAMPLES, 'northwind-brief.pdf') });
+    const firstReady = await waitForStatus(registry, first.id, 30000);
+
+    const second = ingest(session, registry, { path: join(SAMPLES, 'northwind-brief.pdf') });
+    const secondReady = await waitForStatus(registry, second.id, 30000);
+
+    expect(secondReady.status).toBe('ready');
+    expect(secondReady.doc?.markdownPath).not.toBe(firstReady.doc?.markdownPath);
+    expect(secondReady.tables?.map((t) => t.tableName)).toEqual(firstReady.tables?.map((t) => t.tableName));
+    const markdown = await getDocument(second.id);
+    expect(markdown.ok).toBe(true);
+    if (markdown.ok) expect(markdown.data).toContain('Northwind');
+  }, 60000);
 
   it('ingests a txt file with a single source marker and no tables', async () => {
     session = await createSession('ingdoc2');
@@ -354,6 +493,162 @@ describe('ingest (web)', () => {
 
     expect(finished.status).toBe('ready');
     expect(finished.proposedTasks).toHaveLength(3);
+  });
+});
+
+// A workbook with several sheets: every non-empty sheet becomes its own table, all
+// owned by the one Source, so a scoped query can read them all and nothing else.
+describe('ingest (multi-sheet workbook)', () => {
+  let session: DuckDBSession;
+  let registry: SourceRegistry;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ingest-sheets-'));
+  });
+
+  afterEach(async () => {
+    if (session) closeSession(session);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeWorkbook(name: string): Promise<string> {
+    const workbook = new ExcelJS.Workbook();
+    const revenue = workbook.addWorksheet('Revenue');
+    revenue.addRow(['region', 'amount']);
+    revenue.addRow(['EU', 10]);
+    revenue.addRow(['US', 20]);
+    workbook.addWorksheet('Notes'); // empty: never registered
+    const budget = workbook.addWorksheet('Q2 Budget');
+    budget.addRow(['Budget report, Q2 2026']); // a title row above the header
+    budget.addRow([]);
+    budget.addRow(['team', 'budget']);
+    budget.addRow(['ops', 5]);
+    budget.addRow(['eng', 7.5]);
+    budget.addRow(['sales', 3]);
+    const path = join(dir, name);
+    await workbook.xlsx.writeFile(path);
+    return path;
+  }
+
+  it('registers every non-empty sheet as its own queryable table on the one source', async () => {
+    session = await createSession('sheets1');
+    registry = createSourceRegistry();
+
+    const source = ingest(session, registry, { path: await writeWorkbook('finance.xlsx') });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('ready');
+    expect(finished.tables?.map((t) => t.tableName)).toEqual(['finance', 'finance__q2_budget']);
+    const [revenue, budget] = finished.tables!;
+    expect(revenue!.rowCount).toBe(2);
+    expect(revenue!.columns.map((c) => c.name)).toEqual(['region', 'amount']);
+    // header detection: the title row is skipped, the real header names the columns
+    expect(budget!.rowCount).toBe(3);
+    expect(budget!.columns.map((c) => c.name)).toEqual(['team', 'budget']);
+
+    const total = await query(session, 'SELECT SUM(budget) AS total FROM "finance__q2_budget"');
+    expect(total.ok).toBe(true);
+    if (total.ok) expect(Number(total.data.rows[0]!.total)).toBe(15.5);
+
+    expect(finished.summary).toContain('table finance (sheet "Revenue")');
+    expect(finished.summary).toContain('table finance__q2_budget (sheet "Q2 Budget")');
+    expect(finished.summary).toContain('title rows above the header were skipped');
+    expect(finished.summary).not.toContain('Notes');
+  });
+
+  it('keeps the id-suffixed scheme for every sheet when the plain name is already taken', async () => {
+    session = await createSession('sheets2');
+    registry = createSourceRegistry();
+
+    const first = ingest(session, registry, { path: await writeWorkbook('finance.xlsx') });
+    await waitForStatus(registry, first.id);
+    await mkdir(join(dir, 'b'));
+    const secondPath = join(dir, 'b', 'finance.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet('Main').addRows([['k', 'v'], ['a', 1]]);
+    workbook.addWorksheet('Extra').addRows([['k', 'v'], ['b', 2], ['c', 3]]);
+    await workbook.xlsx.writeFile(secondPath);
+
+    const second = ingest(session, registry, { path: secondPath });
+    const secondReady = await waitForStatus(registry, second.id);
+
+    expect(secondReady.tables?.map((t) => t.tableName)).toEqual(['finance_2', 'finance_2__extra']);
+    expect(secondReady.tables?.map((t) => t.rowCount)).toEqual([1, 2]);
+  });
+
+  it('every sheet table is in scope for its own source and out of scope for another', async () => {
+    session = await createSession('sheets3');
+    registry = createSourceRegistry();
+
+    const workbook = ingest(session, registry, { path: await writeWorkbook('finance.xlsx') });
+    const other = ingest(session, registry, { path: join(FIXTURES, 'sample.csv') });
+    await Promise.all([waitForStatus(registry, workbook.id), waitForStatus(registry, other.id)]);
+
+    // Built the way the analysis tools build it (src/mastra/tools/analysis.ts): a table
+    // is allowed exactly when an in-scope source lists it in `tables`.
+    const scopeFor = (sourceIds: string[]) => {
+      const allowed = new Set<string>();
+      const blocked = new Set<string>();
+      for (const s of registry.listSources()) {
+        for (const t of s.tables ?? []) (sourceIds.includes(s.id) ? allowed : blocked).add(t.tableName.toLowerCase());
+      }
+      return { allowed, blocked };
+    };
+
+    const refs = await referencedTables(session, 'SELECT * FROM "finance" r CROSS JOIN "finance__q2_budget" b');
+    expect(refs.ok).toBe(true);
+    if (!refs.ok) return;
+    expect(scopeViolations(refs.data, scopeFor([workbook.id]))).toEqual([]);
+    expect(scopeViolations(refs.data, scopeFor([other.id])).sort()).toEqual(['finance', 'finance__q2_budget']);
+  });
+
+  it('a workbook the sheet listing cannot open still fails cleanly through DuckDB', async () => {
+    session = await createSession('sheets4');
+    registry = createSourceRegistry();
+    // Zip magic and the workbook entry name, so detectType says xlsx, but no real zip behind it.
+    const path = join(dir, 'broken.xlsx');
+    const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+    await writeFile(path, Buffer.concat([zipMagic, Buffer.alloc(26), Buffer.from('xl/workbook.xml', 'ascii'), Buffer.alloc(64)]));
+
+    const source = ingest(session, registry, { path });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('failed');
+    expect(finished.error?.code).toBe('PARSE_FAILED');
+    expect(finished.error?.message).toContain('Could not register');
+  });
+});
+
+describe('ingest (markdown)', () => {
+  let session: DuckDBSession;
+  let registry: SourceRegistry;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ingest-md-'));
+  });
+
+  afterEach(async () => {
+    if (session) closeSession(session);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('ingests a .md file as a text document whose markdown is readable', async () => {
+    session = await createSession('ingmd1');
+    registry = createSourceRegistry();
+    const path = join(dir, 'q3-plan.md');
+    await writeFile(path, '# Q3 plan\n\n## Goals\n\n- Grow EU revenue by 10%\n- Hire two engineers\n');
+
+    const source = ingest(session, registry, { path });
+    const finished = await waitForStatus(registry, source.id);
+
+    expect(finished.status).toBe('ready');
+    expect(finished.kind).toBe('txt');
+    expect(finished.doc).toBeDefined();
+    const markdown = await getDocument(source.id);
+    expect(markdown.ok).toBe(true);
+    if (markdown.ok) expect(markdown.data).toContain('Grow EU revenue by 10%');
   });
 });
 

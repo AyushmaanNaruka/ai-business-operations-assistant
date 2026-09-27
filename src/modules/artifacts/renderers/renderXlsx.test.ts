@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import ExcelJS from 'exceljs';
-import { renderXlsx } from './renderXlsx';
+import { classifyHeadlineFormat, describeDataSheetLayout, renderXlsx } from './renderXlsx';
 import type { WorkbookPlan } from '@/modules/artifacts/schemas/workbook';
 import type { Evidence } from '@/types/evidence';
 
@@ -37,7 +37,6 @@ function makePlan(overrides: Partial<WorkbookPlan> = {}): WorkbookPlan {
     title: 'Q3 Campaign Performance Review',
     preparedFor: 'Northwind Analytics',
     dateRange: '1 Jan 2026 - 30 Jun 2026',
-    generatedAt: '2026-09-25',
     summary: {
       headline: [
         { label: 'Total spend', value: 42000, evidenceIds: ['E1'] },
@@ -192,6 +191,60 @@ describe('renderXlsx', () => {
     expect(summarySheet.getRow(spendRowNumber).getCell(2).numFmt).toBe('$#,##0.00');
   });
 
+  it('formats ROAS as a multiple ("3.76x"), never as a percent', async () => {
+    const plan = makePlan({
+      summary: {
+        headline: [
+          { label: 'ROAS', value: 37.6, evidenceIds: ['E2'] },
+          { label: 'Blended ROAS (revenue / spend)', value: 1.21, evidenceIds: ['E2'] },
+        ],
+        findings: ['One', 'Two'],
+      },
+    });
+    const workbook = await reopen(await renderXlsx(plan, makeDataRows(), makeEvidence()));
+    const summarySheet = workbook.getWorksheet('Summary')!;
+
+    const formats: string[] = [];
+    summarySheet.eachRow((row) => {
+      const label = row.getCell(1).value;
+      if (typeof label === 'string' && label.includes('ROAS')) formats.push(row.getCell(2).numFmt);
+    });
+    expect(formats).toEqual(['0.00"x"', '0.00"x"']);
+  });
+
+  it('classifies headline labels by meaning: ratio before percent before currency', () => {
+    expect(classifyHeadlineFormat('ROAS')).toBe('ratio');
+    expect(classifyHeadlineFormat('Return on ad spend')).toBe('ratio');
+    expect(classifyHeadlineFormat('Conversion rate')).toBe('percent');
+    expect(classifyHeadlineFormat('CTR')).toBe('percent');
+    expect(classifyHeadlineFormat('Total revenue')).toBe('currency');
+    expect(classifyHeadlineFormat('Conversions')).toBe('number');
+  });
+
+  it('stamps the Generated date from the render clock, ignoring any date the plan carries', async () => {
+    const plan = { ...makePlan(), generatedAt: '2024-05-13' } as WorkbookPlan;
+    const buffer = await renderXlsx(plan, makeDataRows(), makeEvidence(), { now: new Date('2026-09-27T10:00:00Z') });
+    const summarySheet = (await reopen(buffer)).getWorksheet('Summary')!;
+
+    const lines: string[] = [];
+    summarySheet.eachRow((row) => {
+      const value = row.getCell(1).value;
+      if (typeof value === 'string') lines.push(value);
+    });
+    expect(lines).toContain('Generated: 2026-09-27');
+    expect(lines.join('\n')).not.toContain('2024-05-13');
+  });
+
+  it('resolves a Data column referenced by name to its real A1 range, so it never opens as #NAME?', async () => {
+    const plan = makePlan({
+      calculations: [{ label: 'ROAS', formula: '=SUM(Data!revenue)/SUM(Data!spend)', evidenceIds: ['E2'] }],
+    });
+    const workbook = await reopen(await renderXlsx(plan, makeDataRows(), makeEvidence()));
+    const formula = workbook.getWorksheet('Calculations')!.getRow(2).getCell(2).formula;
+    // makeDataRows: campaign_name, channel, clicks, spend, revenue; ten rows under a header.
+    expect(formula).toBe('SUM(Data!$E$2:$E$11)/SUM(Data!$D$2:$D$11)');
+  });
+
   it('writes a big-font single value cell for a bigNumber chart instead of an image', async () => {
     const plan = makePlan({
       chart: {
@@ -249,5 +302,22 @@ describe('renderXlsx chart embedding (network)', () => {
       // rather than failing the suite over a dependency this test does not control.
       console.warn('renderXlsx chart embedding (network) test skipped: QuickChart call failed.', err);
     }
+  });
+});
+
+describe('describeDataSheetLayout', () => {
+  it('names each Data column by its letter and gives the data row range', () => {
+    const rows = [
+      { channel: 'Email', spend: 10, revenue: 50 },
+      { channel: 'Webinar', spend: 5, revenue: 20 },
+    ];
+    const layout = describeDataSheetLayout(rows);
+    expect(layout).toContain('rows 2 to 3');
+    expect(layout).toContain('A = channel, B = spend, C = revenue');
+    expect(layout).toContain('Data!C2:C3');
+  });
+
+  it('is empty when there are no rows to reference', () => {
+    expect(describeDataSheetLayout([])).toBe('');
   });
 });

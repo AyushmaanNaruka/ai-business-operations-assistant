@@ -7,15 +7,21 @@ import {
   buildPlan,
   checkSourcesReady,
   classifyIntent,
+  comparisonWithResearch,
   decideAction,
   decideDelegationMode,
   gatherKnownFactsForData,
+  hasResearchCue,
   isRateLimitError,
+  moveUrlsIntoObjective,
+  resolveArtifactFindingIds,
   relevantEvidenceIds,
   runDelegation,
   runTurn,
+  specialistsForMixed,
   type Intent,
 } from './orchestrator';
+import { buildTask } from './contracts';
 
 /**
  * A minimal stand-in for a Mastra `Agent`, the same shape
@@ -116,6 +122,35 @@ describe('decideAction', () => {
     expect(result.specialists.sort()).toEqual(['data', 'document']);
   });
 
+  describe('a comparison against a document (Scenario A turn 3)', () => {
+    const withBrief = addSource(addSource(manifest, readySource('src_2', 'brief.pdf', 'pdf')), readySource('src_3', 'notes.docx', 'docx'));
+    const message = 'Now compare that with the audience in the brief';
+
+    it.each(['document', 'mixed'] as const)('routes "%s" to the document then the data specialist, adding the tables to the scope', (intent) => {
+      expect(decideAction(intent, ['src_2'], withBrief, message)).toEqual({
+        kind: 'delegate',
+        specialists: ['document', 'data'],
+        sourceIds: ['src_2', 'src_1'],
+      });
+    });
+
+    it('leaves an unscoped request unscoped', () => {
+      expect(decideAction('document', [], withBrief, message)).toEqual({ kind: 'delegate', specialists: ['document', 'data'] });
+    });
+
+    it('does not apply without comparison language', () => {
+      expect(decideAction('document', ['src_2'], withBrief, 'What does the brief say about the audience?')).toEqual({
+        kind: 'delegate',
+        specialists: ['document'],
+      });
+    });
+
+    it('does not apply when no spreadsheet is loaded', () => {
+      const docsOnly = addSource(emptyManifest(), readySource('src_2', 'brief.pdf', 'pdf'));
+      expect(decideAction('document', ['src_2'], docsOnly, message)).toEqual({ kind: 'delegate', specialists: ['document'] });
+    });
+  });
+
   it('routes "recommendation" to answer_directly, never delegate', () => {
     expect(decideAction('recommendation', [], manifest)).toEqual({ kind: 'answer_directly' });
   });
@@ -134,6 +169,111 @@ describe('decideAction', () => {
     const pendingManifest = addSource(emptyManifest(), pendingSource('src_1', 'campaigns.xlsx'));
     const result = decideAction('data', ['src_1'], pendingManifest);
     expect(result.kind).toBe('wait');
+  });
+});
+
+describe('hasResearchCue / specialistsForMixed: research comes from the message, not only a web source', () => {
+  const files = addSource(addSource(emptyManifest(), readySource('src_1', 'campaigns.xlsx')), readySource('src_2', 'brief.pdf', 'pdf'));
+
+  it.each([
+    'Research this company',
+    'Look up Acme and tell me who they sell to',
+    'Search the web for their pricing',
+    'Check the company website',
+    'How do our competitors price?',
+    'Profile https://taplio.com/ for me',
+    'What does acme.io sell?',
+  ])('reads "%s" as a research cue', (message) => {
+    expect(hasResearchCue(message)).toBe(true);
+  });
+
+  it.each(['Analyse campaigns.xlsx and the brief.pdf', 'What is our conversion rate by channel?', 'Summarise the customer-notes.docx'])(
+    'does not read "%s" as a research cue',
+    (message) => {
+      expect(hasResearchCue(message)).toBe(false);
+    },
+  );
+
+  it('adds research to the file-derived specialists when the message carries a research cue', () => {
+    expect(specialistsForMixed([], files, 'Research this company and analyse my campaign data')).toEqual(['data', 'document', 'research']);
+  });
+
+  it('leaves the file-derived specialists unchanged without a research cue', () => {
+    expect(specialistsForMixed([], files, 'Analyse my campaign data against the brief')).toEqual(['data', 'document']);
+  });
+
+  it('adds research for a URL in the message', () => {
+    expect(specialistsForMixed(['src_1'], files, 'Compare https://acme.com/pricing with our spend')).toEqual(['data', 'research']);
+  });
+
+  it('routes research alone when no files are loaded and the message asks for the web', () => {
+    expect(specialistsForMixed([], emptyManifest(), 'look up Acme')).toEqual(['research']);
+  });
+});
+
+describe('decideAction: a comparison against a researched company (Scenario B turn 2)', () => {
+  const tables = addSource(emptyManifest(), readySource('src_1', 'campaigns.xlsx'));
+  const message = "Now compare it with the target company's audience";
+  const researchFinding: Finding = {
+    id: 'F1',
+    statement: 'Acme sells to mid-market product teams',
+    evidenceIds: ['E7'],
+    reasoning: 'Established by the research specialist for: Profile the company at acme.com',
+    soWhat: '',
+    confidence: 'medium',
+    createdAt: '2026-09-24T00:00:00.000Z',
+  };
+  const researched = addFinding(tables, researchFinding);
+
+  it.each(['mixed', 'research', 'document'] as const)('reuses a prior research finding: "%s" goes to the data leg alone', (intent) => {
+    expect(decideAction(intent, [], researched, message)).toEqual({ kind: 'delegate', specialists: ['data'] });
+  });
+
+  it('adds the tables to a scoped request', () => {
+    const scoped = addSource(researched, readySource('src_9', 'notes.txt', 'txt'));
+    expect(decideAction('mixed', ['src_9'], scoped, message)).toEqual({
+      kind: 'delegate',
+      specialists: ['data'],
+      sourceIds: ['src_9', 'src_1'],
+    });
+  });
+
+  it('researches first, then queries, when nothing is researched yet and the request asks for it', () => {
+    const ask = 'Look up the target company and compare it with our campaign audience';
+    expect(decideAction('mixed', [], tables, ask)).toEqual({ kind: 'delegate', specialists: ['research', 'data'] });
+    expect(decideDelegationMode(ask, ['research', 'data'])).toEqual({ mode: 'sequential', order: ['research', 'data'] });
+  });
+
+  it('researches then queries for a "research" classification naming the company, with nothing researched yet', () => {
+    expect(decideAction('research', [], tables, message)).toEqual({ kind: 'delegate', specialists: ['research', 'data'] });
+  });
+
+  it('does not apply to a comparison that names neither the company nor the web', () => {
+    expect(comparisonWithResearch('Now compare that with last quarter', [], researched)).toBeNull();
+    expect(decideAction('mixed', [], researched, 'Now compare that with last quarter')).toEqual({ kind: 'delegate', specialists: ['data'] });
+  });
+
+  it('still sends "the audience in the brief" to the document when a brief is loaded', () => {
+    const withBrief = addSource(researched, readySource('src_2', 'brief.pdf', 'pdf'));
+    expect(decideAction('mixed', [], withBrief, 'Now compare that with the audience in the brief')).toEqual({
+      kind: 'delegate',
+      specialists: ['document', 'data'],
+    });
+  });
+
+  it('leaves a plain "data" intent alone (its knownFacts already carry the researched audience)', () => {
+    expect(decideAction('data', [], researched, message)).toEqual({ kind: 'delegate', specialists: ['data'] });
+  });
+});
+
+describe('the unsupported reply', () => {
+  it('lists artifacts as something it does now, not "soon"', async () => {
+    const turn = await runTurn('log into our CRM', [], emptyManifest(), {
+      classify: async () => 'unsupported' as Intent,
+      delegateFn: vi.fn(),
+    });
+    expect(turn.message).not.toMatch(/soon/i);
+    expect(turn.message).toMatch(/reports, spreadsheets, decks and plans/);
   });
 });
 
@@ -237,9 +377,26 @@ describe('runTurn: delegation happens for data/document/research/mixed', () => {
 
     const turn = await runTurn('research this and analyse my data', ['src_1', 'src_2'], manifest, { classify, delegateFn });
 
+    // "research" asks for the web even though no web source is loaded: the research leg joins.
     expect(turn.action).toBe('delegate');
-    expect(turn.outcomes.map((o) => o.specialist).sort()).toEqual(['data', 'document']);
-    expect(delegateFn).toHaveBeenCalledTimes(2);
+    expect(turn.outcomes.map((o) => o.specialist).sort()).toEqual(['data', 'document', 'research']);
+    expect(delegateFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs Scenario B turn 1 (research + uploaded data + strategy) with research and data in parallel', async () => {
+    const delegateFn = vi.fn(async () => ({ answer: 'ok', evidence: [], gaps: [], failures: [] }));
+    const classify = vi.fn(async () => 'mixed' as Intent);
+    const manifest = addSource(emptyManifest(), readySource('src_1', 'campaigns.xlsx'));
+
+    const turn = await runTurn(
+      'Research this company, analyze the campaign data I uploaded, and prepare a campaign strategy based on both',
+      [],
+      manifest,
+      { classify, delegateFn },
+    );
+
+    expect(turn.outcomes.map((o) => o.specialist).sort()).toEqual(['data', 'research']);
+    expect(turn.delegationMode).toBe('parallel');
   });
 
   it('turns a delegate() throw (a malformed specialist result) into a failed outcome instead of throwing', async () => {
@@ -283,6 +440,23 @@ describe('decideDelegationMode', () => {
   ])('treats "%s" as sequential too (dependency-language variants)', (message) => {
     const result = decideDelegationMode(message, ['data', 'research']);
     expect(result.mode).toBe('sequential');
+  });
+
+  it('runs a comparison with a document sequentially, document first, so its fact can scope the SQL', () => {
+    expect(decideDelegationMode('Now compare that with the audience in the brief', ['document', 'data'])).toEqual({
+      mode: 'sequential',
+      order: ['document', 'data'],
+    });
+    // Even when the data keyword comes first in the sentence.
+    expect(decideDelegationMode('Compare the campaign data against the brief', ['data', 'document'])).toEqual({
+      mode: 'sequential',
+      order: ['document', 'data'],
+    });
+  });
+
+  it('keeps a comparison with no document leg parallel', () => {
+    const result = decideDelegationMode('Research this competitor and compare it to our own campaign performance', ['research', 'data']);
+    expect(result).toEqual({ mode: 'parallel' });
   });
 
   it('does not misfire on ordinary text that happens to contain "data" or "research" without a dependency word', () => {
@@ -377,6 +551,34 @@ describe('runTurn: mixed delegation mode (P5.4)', () => {
 
     const [, secondTask] = delegateFn.mock.calls[1]! as [Agent, SpecialistTask];
     expect(secondTask.knownFacts).toEqual(researchEvidence);
+  });
+
+  it('a three-leg chain hands the last leg every earlier leg\'s evidence, not only the previous one\'s', async () => {
+    const fact = (id: string, kind: Evidence['kind']): Evidence => ({
+      id,
+      claim: id,
+      kind,
+      sourceId: 'src_x',
+      sourceName: 'x',
+      locator: 'x',
+      confidence: 'medium',
+      createdAt: '2026-09-24T00:00:00.000Z',
+    });
+    const manifest = addSource(mixedManifest(), readySource('src_3', 'brief.pdf', 'pdf'));
+    const delegateFn = vi.fn(async (_agent: Agent, task: SpecialistTask) => {
+      if (task.expect.includes('document passages')) return { answer: 'doc', evidence: [fact('E1', 'document')], gaps: [], failures: [] };
+      if (task.expect.includes('public web')) return { answer: 'web', evidence: [fact('E2', 'web')], gaps: [], failures: [] };
+      return { answer: 'data', evidence: [], gaps: [], failures: [] };
+    });
+
+    const turn = await runTurn('Read the brief, then research the company, then analyse my data', [], manifest, {
+      classify: async () => 'mixed' as Intent,
+      delegateFn,
+    });
+
+    expect(turn.delegationOrder).toEqual(['document', 'research', 'data']);
+    const [, lastTask] = delegateFn.mock.calls[2]! as [Agent, SpecialistTask];
+    expect(lastTask.knownFacts.map((e) => e.id)).toEqual(['E1', 'E2']);
   });
 
   it('when the first leg of a sequential chain fails, the second specialist still runs with empty knownFacts and the failure is surfaced, not dropped', async () => {
@@ -840,6 +1042,8 @@ describe('rate limited delegations (D-65)', () => {
     expect(isRateLimitError(new Error('Quota exceeded for metric ... limit: 20, model: gemini-2.5-flash'))).toBe(true);
     expect(isRateLimitError(new Error('Rate limit reached for model `openai/gpt-oss-120b`'))).toBe(true);
     expect(isRateLimitError(new Error('wrapped', { cause: new Error('RESOURCE_EXHAUSTED') }))).toBe(true);
+    expect(isRateLimitError(new Error('You have reached your specified API usage limits. You will regain access on 2026-10-01'))).toBe(true);
+    expect(isRateLimitError(new Error('Request too large for model on tokens per minute (TPM): Limit 8000, Requested 31000'))).toBe(true);
     expect(isRateLimitError(new Error('does not match SpecialistResultSchema'))).toBe(false);
   });
 
@@ -857,5 +1061,56 @@ describe('rate limited delegations (D-65)', () => {
     const delegateFn = vi.fn().mockRejectedValue(new Error('does not match SpecialistResultSchema'));
     const result = await runDelegation('data', task, emptyManifest(), delegateFn);
     expect(!result.ok && result.error.code).toBe('PARSE_FAILED');
+  });
+
+  it('names this conversation\'s sources when the task is unscoped, since those ids become the tools\' only scope (D-72)', async () => {
+    const delegateFn = vi.fn().mockResolvedValue({ answer: 'ok', evidence: [], gaps: [], failures: [] });
+    const manifest = addSource(addSource(emptyManifest(), readySource('src_3', 'a.xlsx')), readySource('src_9', 'b.pdf', 'pdf'));
+
+    await runDelegation('data', buildTask('Q', [], [], 'x'), manifest, delegateFn);
+    await runDelegation('data', buildTask('Q', ['src_9'], [], 'x'), manifest, delegateFn);
+
+    expect(delegateFn.mock.calls[0]![1].sourceIds).toEqual(['src_3', 'src_9']);
+    expect(delegateFn.mock.calls[1]![1].sourceIds).toEqual(['src_9']);
+  });
+});
+
+describe('moveUrlsIntoObjective (Scenario B turn 1)', () => {
+  it('takes a URL out of the scope and names it in the objective, so research runs instead of "not found"', () => {
+    expect(moveUrlsIntoObjective('Research the company at the provided URL.', ['https://taplio.com/', 'src_2'])).toEqual({
+      objective: 'Research the company at the provided URL. (https://taplio.com/)',
+      sourceIds: ['src_2'],
+    });
+  });
+
+  it('does not repeat a URL the objective already names, and leaves plain source ids alone', () => {
+    expect(moveUrlsIntoObjective('Research https://taplio.com/', ['https://taplio.com/'])).toEqual({
+      objective: 'Research https://taplio.com/',
+      sourceIds: [],
+    });
+    expect(moveUrlsIntoObjective('Q', ['src_1'])).toEqual({ objective: 'Q', sourceIds: ['src_1'] });
+  });
+});
+
+describe('resolveArtifactFindingIds (Scenario B turn 3)', () => {
+  const finding = (id: string, evidenceIds: string[]): Finding => ({
+    id,
+    statement: 's',
+    evidenceIds,
+    reasoning: 'r',
+    soWhat: '',
+    confidence: 'high',
+    createdAt: '2026-09-27T00:00:00.000Z',
+  });
+  const manifest = { ...emptyManifest(), findings: [finding('F1', ['E198', 'E199']), finding('F2', ['E204']), finding('F3', ['E5'])] };
+
+  it('keeps finding ids and maps evidence ids to the findings that cite them', () => {
+    expect(resolveArtifactFindingIds(['F3'], manifest)).toEqual(['F3']);
+    expect(resolveArtifactFindingIds(['E198', 'E204'], manifest)).toEqual(['F1', 'F2']);
+  });
+
+  it('uses every finding when nothing is given or nothing resolves, rather than building from nothing', () => {
+    expect(resolveArtifactFindingIds(undefined, manifest)).toEqual(['F1', 'F2', 'F3']);
+    expect(resolveArtifactFindingIds(['E999'], manifest)).toEqual(['F1', 'F2', 'F3']);
   });
 });

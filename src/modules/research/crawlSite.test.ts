@@ -138,12 +138,22 @@ describe('crawlSite() (Firecrawl)', () => {
     });
 
     const { crawlSite } = await import('./crawlSite');
-    const result = await crawlSite('example.com', 5);
+    // crawlSite waits 2s between polls. Fake setTimeout only, so the wait is skipped
+    // rather than slept through: under a loaded parallel run the real wait was the flake.
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const pending = crawlSite('example.com', 5);
+      await vi.runAllTimersAsync();
+      const result = await pending;
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data).toEqual([{ url: 'https://example.com', markdown: '# Acme', retrievedAt: expect.any(String) }]);
-  }, 15000);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data).toEqual([{ url: 'https://example.com', markdown: '# Acme', retrievedAt: expect.any(String) }]);
+      expect(fetchMock).toHaveBeenCalledTimes(2); // one start, one poll
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('returns SEARCH_QUOTA when Firecrawl is rate limited on crawl start', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 429 });

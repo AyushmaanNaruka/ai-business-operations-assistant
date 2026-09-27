@@ -136,6 +136,23 @@ function FileGroup({ title, empty, children }: { title: string; empty: string; c
   );
 }
 
+/**
+ * What ingestion actually got out of a ready source, so an upload reports more than
+ * "Ready": a document's pages and any tables pulled out of it (docs/08-DEMO-SCENARIOS.md
+ * Scenario A turn 1, "the PDF reports its extracted table"), a spreadsheet's row count.
+ */
+function extractionDetails(source: SessionSource): string[] {
+  if (source.status !== "ready") return [];
+  const plural = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+  const tables = source.tables ?? [];
+  if (source.doc) {
+    const details = source.doc.pageCount ? [plural(source.doc.pageCount, "page")] : [];
+    if (tables.length > 0) details.push(`${plural(tables.length, "table")} extracted`);
+    return details;
+  }
+  return tables.length === 1 ? [plural(tables[0]!.rowCount, "row")] : tables.length > 1 ? [plural(tables.length, "table")] : [];
+}
+
 function SourceRow({ source, active, onOpen }: { source: SessionSource; active: boolean; onOpen: () => void }) {
   // A pending source's `kind` is a placeholder until type detection finishes; the extension is the better guess.
   const kind = source.status === "pending" ? (source.name.split(".").pop()?.toLowerCase() ?? "") : source.kind;
@@ -155,7 +172,9 @@ function SourceRow({ source, active, onOpen }: { source: SessionSource; active: 
           {source.name}
         </span>
         <span className={cn("block truncate text-xs", source.status === "failed" ? "text-destructive" : "text-muted-foreground")}>
-          {source.status === "failed" && source.error ? source.error.message : `${fileKindLabel(kind)} · ${STATUS_LABEL[source.status]}`}
+          {source.status === "failed" && source.error
+            ? source.error.message
+            : [fileKindLabel(kind), ...extractionDetails(source), STATUS_LABEL[source.status]].join(" · ")}
         </span>
       </span>
       {source.status === "pending" && <Loader2Icon className="text-muted-foreground size-4 shrink-0 animate-spin" />}

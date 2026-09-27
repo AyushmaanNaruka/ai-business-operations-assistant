@@ -115,7 +115,12 @@ export async function POST(req: Request) {
       onError: (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[chat] model error:", message);
-        if (/quota|rate limit|429|overloaded|high demand|503/i.test(message)) {
+        if (/usage limit|billing|credit balance/i.test(message)) {
+          // Anthropic's spend cap arrives as an HTTP 400 invalid_request_error, so it
+          // matches none of the rate limit wording below.
+          return "A model provider's usage or billing limit has been reached. An administrator should check the provider account.";
+        }
+        if (/quota|rate limit|429|overloaded|high demand|503|request too large|tokens per minute/i.test(message)) {
           // Reaching here means every model in the tier's fallback chain
           // (src/mastra/models.ts) was rate limited or overloaded.
           return "The model providers are rate limiting or overloaded right now. Wait a minute and try again.";

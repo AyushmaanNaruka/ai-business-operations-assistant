@@ -341,6 +341,60 @@ function addSourceFooter(slide: PptxGenJS.Slide, evidenceIds: string[], evidence
   });
 }
 
+/**
+ * Every evidence id the deck cites, in order of first appearance: slide-level ids, then
+ * a chart's own ids and each of its points', then a table's. This is what the closing
+ * Sources slide lists.
+ */
+export function deckEvidenceIds(plan: DeckPlan): string[] {
+  const ids: string[] = [];
+  for (const s of plan.slides) {
+    ids.push(...s.evidenceIds);
+    if (s.chart) ids.push(...s.chart.evidenceIds, ...s.chart.data.flatMap((d) => d.evidenceIds));
+    if (s.table) ids.push(...s.table.evidenceIds);
+  }
+  return [...new Set(ids)];
+}
+
+const SOURCES_SLIDE_TITLE = 'Sources';
+
+/**
+ * A closing Sources slide, built here from the evidence ledger rather than authored:
+ * the per-slide footers name a source file, but a reader checking a number needs the
+ * claim and the exact locator behind each evidence id, the same row shape the Word
+ * and Excel artifacts carry (skills/evidence-citation). An id with no gathered
+ * evidence entry is skipped, never described from the plan's own text; a deck citing
+ * nothing gets no Sources slide at all.
+ */
+function addSourcesSlide(pptx: PptxGenJS, plan: DeckPlan, evidenceById: Map<string, Evidence>): void {
+  const entries = deckEvidenceIds(plan)
+    .map((id) => evidenceById.get(id))
+    .filter((e): e is Evidence => e !== undefined);
+  if (entries.length === 0) return;
+
+  const slide = pptx.addSlide({ masterName: MASTER_NAME });
+  slide.addText(SOURCES_SLIDE_TITLE, { placeholder: 'title' });
+
+  const headerOptions = { bold: true, color: COLORS.tableHeaderText, fill: { color: COLORS.tableHeaderFill }, fontSize: 10 };
+  const headerRow: PptxGenJS.TableRow = ['Evidence', 'Claim', 'Source', 'Locator'].map((text) => ({ text, options: headerOptions }));
+  const bodyRows: PptxGenJS.TableRow[] = entries.map((e) =>
+    [e.id, e.claim, e.sourceName, e.locator].map((text) => ({ text, options: { fontSize: 9, color: COLORS.tableBody } })),
+  );
+  const fullWidth = SLIDE_W - MARGIN_X * 2;
+  slide.addTable([headerRow, ...bodyRows], {
+    x: MARGIN_X,
+    y: CONTENT_Y,
+    w: fullWidth,
+    colW: [0.9, fullWidth * 0.45, fullWidth * 0.2, fullWidth * 0.35 - 0.9],
+    fontFace: 'Calibri',
+    border: { type: 'solid', color: COLORS.tableBorder, pt: 0.75 },
+    autoPage: true,
+    autoPageRepeatHeader: true,
+    autoPageHeaderRows: 1,
+  });
+  slide.addNotes('Every figure in this deck traces to one of these evidence entries: the claim, where it came from, and where to find it.');
+}
+
 export async function renderPptx(plan: DeckPlan, evidence: Evidence[]): Promise<Buffer> {
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
@@ -380,6 +434,8 @@ export async function renderPptx(plan: DeckPlan, evidence: Evidence[]): Promise<
     // per P6.4's instruction not to silently skip it if it were ever violated upstream.
     slide.addNotes(s.notes);
   }
+
+  addSourcesSlide(pptx, plan, evidenceById);
 
   // pptxgenjs's `write()` return type spans every possible `outputType`; with
   // 'nodebuffer' selected it always resolves a real Node `Buffer` at runtime, which is

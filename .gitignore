@@ -14,7 +14,7 @@ data/*.db-*
 data/documents/
 storage/
 uploads/
-generated/
+/generated/
 .DS_Store
 Thumbs.db
 .turbo/

@@ -20,6 +20,10 @@ Ten to fourteen slides. Narrative arc:
 7. **Next steps** specific, owned, dated
 8. **Appendix** the supporting numbers
 
+A closing **Sources** slide (evidence ID, claim, source, locator for every ID the deck cites) is added by the renderer from the evidence ledger. Do not author one.
+
+If the evidence does not name the client, title the deck without a client name. Never write a template slot such as "[Client Name]" or "[Insert date]"; a plan containing one fails validation.
+
 ## The one rule that changes everything
 
 **The slide title is the message, not the topic.**

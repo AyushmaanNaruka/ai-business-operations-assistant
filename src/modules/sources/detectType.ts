@@ -18,6 +18,10 @@ const TEXT_KIND_BY_EXTENSION: Record<string, SourceKind> = {
   '.csv': 'csv',
   '.json': 'json',
   '.txt': 'txt',
+  // Markdown is plain text to this pipeline: it already is the format documents are
+  // converted to, so it takes the txt path (one source marker, no page concept).
+  '.md': 'txt',
+  '.markdown': 'txt',
 };
 
 /**
@@ -66,7 +70,7 @@ export async function detectType(path: string): Promise<ToolResult<SourceKind>> 
 
   return fail(
     'UNSUPPORTED_FORMAT',
-    `Unrecognised file type${ext ? ` (${ext})` : ''}. Supported types: .xlsx, .csv, .pdf, .docx, .txt, .json.`,
+    `Unrecognised file type${ext ? ` (${ext})` : ''}. Supported types: .xlsx, .csv, .pdf, .docx, .txt, .md, .json.`,
     { suggestion: 'Convert the file to one of the supported formats.' },
   );
 }

@@ -9,7 +9,7 @@ Inherits `evidence-citation`.
 
 ## Summary sheet header
 
-Before the headline numbers: the workbook title, the client or company name, the date range the data covers, and the date the workbook was generated. A reviewer opening the file cold should not have to ask what this is or how current it is.
+Before the headline numbers: the workbook title, the client or company name, the date range the data covers, and the date the workbook was generated. A reviewer opening the file cold should not have to ask what this is or how current it is. The generated date is stamped by the renderer at build time; do not author one. Leave the client name out if the evidence does not give it, never write a placeholder like "[Client Name]".
 
 ## The five sheet convention
 
@@ -23,7 +23,9 @@ Before the headline numbers: the workbook title, the client or company name, the
 
 ## The rule that matters most
 
-**Calculations contain formulas, not values.** Write `=SUM(Data!H2:H1241)/SUM(Data!G2:G1241)`, not `0.042`. A reviewer who clicks a cell must see how it was derived.
+**Calculations contain formulas, not values.** Write `=SUM(Data!J2:J1204)/SUM(Data!I2:I1204)` (or `Data!conversions`, which the renderer resolves to its exact range), not `0.040`. A reviewer who clicks a cell must see how it was derived.
+
+Reference the Data sheet only as the given layout describes it: an A1 range inside its bounds, or a whole column by its exact name (`=SUM(Data!revenue)/SUM(Data!spend)`), which the renderer converts to that column's A1 range. Any other name opens as #NAME? and fails validation. A workbook is only built when there are underlying rows for the Data sheet.
 
 This is the single clearest proof the file was constructed rather than transcribed, and it is what the brief means by "meaningful, usable content".
 

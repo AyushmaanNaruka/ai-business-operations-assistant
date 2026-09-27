@@ -1,6 +1,7 @@
 import type { Evidence } from '@/types/evidence';
 import type { Finding } from '@/types/finding';
 import { EvidenceIdSchema, FindingIdSchema, PLAN_SCHEMAS, type ArtifactPlanKind } from './schemas';
+import { resolveFormula, type DataSheetShape } from './formulas';
 
 /**
  * The house rules the schemas cannot express, applied after a plan has already parsed
@@ -43,7 +44,16 @@ import { EvidenceIdSchema, FindingIdSchema, PLAN_SCHEMAS, type ArtifactPlanKind 
 export function validatePlan(
   plan: unknown,
   kind: ArtifactPlanKind,
-  context: { evidence: Evidence[]; findings: Finding[] },
+  context: {
+    evidence: Evidence[];
+    findings: Finding[];
+    /**
+     * The workbook's real Data sheet (headers and row count), when known. With it,
+     * Calculations references are checked against the actual bounds and a column may be
+     * referenced by name; without it, only A1 references pass.
+     */
+    dataSheet?: DataSheetShape;
+  },
 ): string[] {
   const schema = PLAN_SCHEMAS[kind];
   const parsed = schema.safeParse(plan);
@@ -56,11 +66,35 @@ export function validatePlan(
 
   const errors: string[] = [];
   walk(parsed.data, 'plan', undefined, evidenceById, findingById, errors);
+  if (kind === 'workbook') checkFormulaReferences(parsed.data as { calculations: { formula: string }[] }, context.dataSheet, errors);
 
   // Deduplicate while preserving first-seen order (Set iterates in insertion order),
   // so the same missing id referenced from two different places is still reported
   // once per location, but an identical error string is never repeated.
   return Array.from(new Set(errors));
+}
+
+/**
+ * A Calculations formula must resolve to real cells: `=SUM(Data!revenue)` parses as a
+ * plan (it starts with "=") but opens in Excel as #NAME? unless something turns the
+ * name into a range. `resolveFormula` (./formulas) is that something, shared with the
+ * renderer: a Data column name is accepted only when the real Data sheet has that
+ * column (the renderer then writes its exact A1 range), and every other reference is
+ * checked against the sheet's real bounds, or rejected outright when the Data sheet is
+ * empty. The earlier regex let `Data!CPA` (three capitals read as a column),
+ * `data!revenue`, `'Data'!revenue` and bare names through; this parses the formula
+ * rather than pattern matching one spelling.
+ */
+function checkFormulaReferences(
+  plan: { calculations: { formula: string }[] },
+  dataSheet: DataSheetShape | undefined,
+  errors: string[],
+): void {
+  plan.calculations.forEach((calculation, index) => {
+    for (const error of resolveFormula(calculation.formula, dataSheet).errors) {
+      errors.push(`plan.calculations[${index}].formula: ${error}`);
+    }
+  });
 }
 
 /** Builds a "plan.findings[2].statement" style path from a Zod issue's raw path segments. */
@@ -85,14 +119,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 const EXEMPT_LEAF_KEYS = new Set(['id', 'evidenceId', 'findingId', 'kind', 'confidence']);
 
-const PLACEHOLDER_SUBSTRINGS = ['tbd', 'todo', 'lorem ipsum', 'placeholder', 'insert here', 'xxx', 'coming soon'];
+const PLACEHOLDER_SUBSTRINGS = [
+  'tbd',
+  'todo',
+  'lorem ipsum',
+  'placeholder',
+  'insert here',
+  'xxx',
+  'coming soon',
+  'to be determined',
+  'to be confirmed',
+];
 
-function isPlaceholderText(value: string): boolean {
+/**
+ * Template-shaped gaps a model leaves when it has nothing to put there: "XX%", "$X",
+ * "X.X%", "{{client}}", "TBC". Word-bounded so ordinary words ("Xbox", "next") never match.
+ */
+const PLACEHOLDER_PATTERNS: RegExp[] = [
+  /\bX{2,}\b/i, // "XX", "XX%", "$XX,XXX"
+  /(^|[\s(])\$X\b/, // "$X"
+  /\bX(\.X+)?%/, // "X%", "X.X%"
+  /\bTBC\b/i,
+  /\{\{[^}]*\}\}/, // "{{client name}}"
+];
+
+// A bracketed run is a citation when it holds only evidence or finding ids ("[E12]",
+// "[E12, E13]", "[F3; E4]", "[E2-E5]", "[Source: E4]"), or a plain footnote number ("[2]").
+const CITATION_BRACKET =
+  /^\s*(?:(?:sources?|evidence|see)\s*:?\s*)?(?:[EF]\d+|\d+)(?:(?:\s*(?:,|;|-|–|and)\s*|\s+)(?:[EF]\d+|\d+))*\s*$/i;
+
+/**
+ * "[Client Name]", "[mention a high-level area of focus]", "[Insert X]", "[date]": a
+ * square-bracketed run that is not a citation is a template slot a model left unfilled.
+ * "[sic]" is the one bracketed word of real prose, and a markdown link "[text](url)" is
+ * a link, not a slot.
+ */
+function hasBracketPlaceholder(value: string): boolean {
+  for (const m of value.matchAll(/\[([^[\]]*)\]/g)) {
+    const inner = m[1]!;
+    if (CITATION_BRACKET.test(inner)) continue;
+    if (/^\s*sic\s*$/i.test(inner)) continue;
+    if (value[(m.index ?? 0) + m[0].length] === '(') continue; // markdown link
+    return true;
+  }
+  return false;
+}
+
+/** True for empty, filler or template-slot text that must never reach a rendered file. */
+export function isPlaceholderText(value: string): boolean {
   const trimmed = value.trim();
   if (trimmed.length === 0) return true;
   const lower = trimmed.toLowerCase();
   if (lower === 'n/a' || lower === '...') return true;
-  return PLACEHOLDER_SUBSTRINGS.some((needle) => lower.includes(needle));
+  if (PLACEHOLDER_SUBSTRINGS.some((needle) => lower.includes(needle))) return true;
+  if (PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(trimmed))) return true;
+  return hasBracketPlaceholder(trimmed);
 }
 
 /** Coerces an Evidence.value to a number if it is one, or a string that parses to one cleanly. */

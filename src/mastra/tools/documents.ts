@@ -5,6 +5,7 @@ import { getDocument, search } from '@/modules/documents';
 import { numericValue } from '@/modules/evidence';
 import { fail } from '@/modules/reliability';
 import { getRuntime } from '../runtime';
+import { inScope, sourceScope, type SourceScope } from './scope';
 
 const toolResultSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
   z.discriminatedUnion('ok', [
@@ -38,10 +39,22 @@ function safe<T>(fn: () => Promise<ToolResult<T>>): () => Promise<ToolResult<T>>
   };
 }
 
+/**
+ * The failure for a source id outside this conversation's scope (D-72). Worded as
+ * "not one of this conversation's sources" whether or not another conversation owns
+ * an id like it, so a scoped call can neither read nor confirm another user's upload.
+ */
+function outOfScope(sourceId: string, recoverable: boolean) {
+  return fail('SOURCE_NOT_FOUND', `"${sourceId}" is not one of this conversation's sources.`, {
+    recoverable,
+    suggestion: 'Use only the source ids named in the task, or report the missing source as a gap.',
+  });
+}
+
 export const listDocumentsTool = createTool({
   id: 'list_documents',
   description:
-    'Lists every document source loaded in this session (pdf, docx, txt), showing each one\'s mode: "full" ' +
+    'Lists every document source this conversation may read (pdf, docx, txt), showing each one\'s mode: "full" ' +
     '(read it whole with get_document) or "indexed" (too large for full context, search it with search_documents). ' +
     'Call this first, before choosing get_document or search_documents, so you never have to guess which tool ' +
     'applies to which source.',
@@ -60,21 +73,23 @@ export const listDocumentsTool = createTool({
       ),
     }),
   ),
-  execute: safe(async () => {
-    const { registry } = await getRuntime();
-    const documents = registry
-      .listSources()
-      .filter((s) => s.status === 'ready' && s.doc)
-      .map((s) => ({
-        sourceId: s.id,
-        name: s.name,
-        mode: s.doc!.mode,
-        ...(s.doc!.pageCount !== undefined ? { pageCount: s.doc!.pageCount } : {}),
-        tokenCount: s.doc!.tokenCount,
-        hasTables: (s.tables?.length ?? 0) > 0,
-      }));
-    return { ok: true as const, data: { documents } };
-  }),
+  execute: async (_inputData: unknown, context: unknown) =>
+    safe(async () => {
+      const scope = sourceScope(context);
+      const { registry } = await getRuntime();
+      const documents = registry
+        .listSources()
+        .filter((s) => s.status === 'ready' && s.doc && inScope(scope, s.id))
+        .map((s) => ({
+          sourceId: s.id,
+          name: s.name,
+          mode: s.doc!.mode,
+          ...(s.doc!.pageCount !== undefined ? { pageCount: s.doc!.pageCount } : {}),
+          tokenCount: s.doc!.tokenCount,
+          hasTables: (s.tables?.length ?? 0) > 0,
+        }));
+      return { ok: true as const, data: { documents } };
+    })(),
 });
 
 export const getDocumentTool = createTool({
@@ -92,8 +107,9 @@ export const getDocumentTool = createTool({
       pageCount: z.number().optional(),
     }),
   ),
-  execute: async (inputData: { sourceId: string }) =>
+  execute: async (inputData: { sourceId: string }, context: unknown) =>
     safe(async () => {
+      if (!inScope(sourceScope(context), inputData.sourceId)) return outOfScope(inputData.sourceId, false);
       const { registry } = await getRuntime();
       const source = registry.getSource(inputData.sourceId);
 
@@ -167,18 +183,27 @@ export const searchDocumentsTool = createTool({
       ),
     }),
   ),
-  execute: async (inputData: { query: string; sourceId?: string }) =>
+  execute: async (inputData: { query: string; sourceId?: string }, context: unknown) =>
     safe(async () => {
+      const scope: SourceScope = sourceScope(context);
+      if (inputData.sourceId && !inScope(scope, inputData.sourceId)) return outOfScope(inputData.sourceId, false);
+
       // Ensures the shared session's sample documents have finished ingesting
       // (and, for indexed-mode sources, finished embedding) before the first
       // search runs against them.
       await getRuntime();
 
-      const filter = inputData.sourceId ? { sourceId: inputData.sourceId } : undefined;
-      const result = await search(inputData.query, filter);
+      // The vector index is shared by every conversation, so a scoped call filters the
+      // query itself to its own sources; an unscoped one searches everything, as before.
+      const result = await search(inputData.query, {
+        ...(inputData.sourceId ? { sourceId: inputData.sourceId } : {}),
+        ...(scope ? { sourceIds: [...scope] } : {}),
+      });
       if (!result.ok) return result;
 
-      return { ok: true as const, data: { passages: result.data } };
+      // Belt and braces: never hand back a passage from outside the scope, whatever the store returned.
+      const passages = result.data.filter((p) => inScope(scope, p.sourceId));
+      return { ok: true as const, data: { passages } };
     })(),
 });
 
@@ -242,8 +267,9 @@ export const recordEvidenceTool = createTool({
     value?: number | string;
     metric?: { name: string; scope: string; unit: 'ratio' | 'currency' | 'count' | 'duration' };
     retrieved: boolean;
-  }) =>
+  }, context: unknown) =>
     safe(async () => {
+      if (!inScope(sourceScope(context), inputData.sourceId)) return outOfScope(inputData.sourceId, true);
       // A keyed figure is stored as a number; "0.22" or "1" would otherwise be refused below.
       const value = inputData.metric ? (numericValue(inputData.value) ?? inputData.value) : inputData.value;
       if (inputData.metric && typeof value !== 'number') {

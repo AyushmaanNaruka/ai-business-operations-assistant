@@ -3,6 +3,10 @@ import type { Source, TableRef } from '@/types';
 export type SourceCardOptions = {
   tables?: TableRef[];
   doc?: Source['doc'];
+  /** Workbook sheet name per table name, for a spreadsheet registered as one table per sheet. */
+  sheets?: Record<string, string>;
+  /** Plain facts about how the file was read (a skipped title row, a sheet that failed), listed last. */
+  notes?: string[];
 };
 
 /**
@@ -43,8 +47,13 @@ export function buildSourceCard(source: Pick<Source, 'id' | 'name'>, opts: Sourc
       for (const table of tables) lines.push(`         -> ${tableLine(table)}`);
     }
   } else {
+    if (tables.length > 1) lines.push(`       ${tables.length} tables:`);
     for (const table of tables) {
       const columnCount = table.columns.length;
+      if (tables.length > 1) {
+        const sheet = opts.sheets?.[table.tableName];
+        lines.push(`       table ${table.tableName}${sheet !== undefined ? ` (sheet ${JSON.stringify(sheet)})` : ''}`);
+      }
       lines.push(`       ${table.rowCount.toLocaleString('en-US')} rows, ${columnCount} columns`);
       lines.push(`       columns: ${table.columns.map((c) => c.name).join(', ')}`);
       if (table.qualityWarnings.length > 0) {
@@ -53,6 +62,8 @@ export function buildSourceCard(source: Pick<Source, 'id' | 'name'>, opts: Sourc
       }
     }
   }
+
+  for (const note of opts.notes ?? []) lines.push(`       note: ${note}`);
 
   return lines.join('\n');
 }

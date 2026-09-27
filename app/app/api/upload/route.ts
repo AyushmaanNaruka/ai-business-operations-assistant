@@ -19,7 +19,7 @@ export const maxDuration = 60;
 const PROJECT_ROOT = resolve(process.cwd(), "..");
 const UPLOAD_DIR = resolve(PROJECT_ROOT, "data/uploads");
 
-const SUPPORTED_EXTENSIONS = new Set([".xlsx", ".csv", ".pdf", ".docx", ".txt", ".json"]);
+const SUPPORTED_EXTENSIONS = new Set([".xlsx", ".csv", ".pdf", ".docx", ".txt", ".md", ".markdown", ".json"]);
 
 function maxUploadBytes(): number {
   const mb = Number(process.env.MAX_UPLOAD_MB || "100");
@@ -59,7 +59,7 @@ export async function POST(req: Request) {
         error:
           ext === ".xls" || ext === ".doc"
             ? `"${name}" is a legacy binary Office file (${ext}), which this system does not read. Save it as ${ext === ".xls" ? ".xlsx" : ".docx"} and upload that instead.`
-            : `"${name}" has an unsupported extension (${ext || "none"}). Supported: .xlsx, .csv, .pdf, .docx, .txt, .json.`,
+            : `"${name}" has an unsupported extension (${ext || "none"}). Supported: .xlsx, .csv, .pdf, .docx, .txt, .md, .json.`,
       },
       { status: 415 },
     );

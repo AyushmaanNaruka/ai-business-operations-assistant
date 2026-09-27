@@ -9,11 +9,14 @@ import type { ArtifactStore } from '@/modules/artifacts/store';
 import {
   authorAndValidate,
   authorPlanOnce,
+  checkArtifactReadiness,
   gatherEvidenceForArtifact,
   loadSkillText,
+  NOTHING_GATHERED_MESSAGE,
   renderArtifactFile,
   renderChartsPrecheck,
   resolveFormat,
+  resolveWorkbookData,
   resolveWorkbookDataRows,
   skillNameFor,
   storeArtifactFile,
@@ -190,6 +193,64 @@ describe('resolveWorkbookDataRows', () => {
   });
 });
 
+describe('resolveWorkbookData', () => {
+  it('names why no rows resolved, so the decline can say it', async () => {
+    const documentEvidence: Evidence = { ...sampleEvidence, id: 'E9', kind: 'document', sourceId: 'src_2' };
+    const none = await resolveWorkbookData([documentEvidence], { getSource: vi.fn(), query: vi.fn() });
+    expect(none).toEqual({ rows: [], gap: 'none of the gathered evidence was computed from an uploaded table' });
+
+    const unloaded = await resolveWorkbookData([sampleEvidence], { getSource: vi.fn().mockReturnValue(undefined), query: vi.fn() });
+    expect(unloaded.gap).toContain('no longer loaded');
+
+    const empty = await resolveWorkbookData([sampleEvidence], {
+      getSource: vi.fn().mockReturnValue({ tables: [{ tableName: 'campaigns' }] }),
+      query: vi.fn().mockResolvedValue({ ok: true, data: { rows: [] } }),
+    });
+    expect(empty.gap).toContain('has no rows');
+  });
+
+  it('carries no gap when rows resolve', async () => {
+    const rows = [{ channel: 'Email' }];
+    const result = await resolveWorkbookData([sampleEvidence], {
+      getSource: vi.fn().mockReturnValue({ tables: [{ tableName: 'campaigns' }] }),
+      query: vi.fn().mockResolvedValue({ ok: true, data: { rows } }),
+    });
+    expect(result).toEqual({ rows });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3c. checkArtifactReadiness
+// ---------------------------------------------------------------------------
+
+describe('checkArtifactReadiness', () => {
+  it('declines when nothing has been gathered: no findings and no data rows', () => {
+    expect(checkArtifactReadiness({ planKind: 'deck', findings: [], dataRows: [] })).toEqual([NOTHING_GATHERED_MESSAGE]);
+    expect(NOTHING_GATHERED_MESSAGE).toContain('I have nothing gathered yet to build this from');
+  });
+
+  it('goes ahead with findings, or with caller-supplied data rows', () => {
+    expect(checkArtifactReadiness({ planKind: 'deck', findings: [sampleFinding], dataRows: [] })).toEqual([]);
+    expect(checkArtifactReadiness({ planKind: 'report', findings: [], dataRows: [{ a: 1 }] })).toEqual([]);
+  });
+
+  it('declines a workbook whose Data rows resolved empty, carrying the reason', () => {
+    const errors = checkArtifactReadiness({
+      planKind: 'workbook',
+      findings: [sampleFinding],
+      dataRows: [],
+      dataGap: 'the table behind source "src_1" is no longer loaded',
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('A workbook needs the underlying data rows');
+    expect(errors[0]).toContain('no longer loaded');
+  });
+
+  it('accepts a workbook with Data rows', () => {
+    expect(checkArtifactReadiness({ planKind: 'workbook', findings: [sampleFinding], dataRows: [{ a: 1 }] })).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 4. loadSkillText
 // ---------------------------------------------------------------------------
@@ -304,6 +365,43 @@ describe('authorPlanOnce', () => {
 
     const [prompt] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(prompt).not.toContain('failed validation');
+  });
+
+  it('includes the Data sheet layout when one is given', async () => {
+    const agent = fakeAgent(() => Promise.resolve({ object: {} }));
+
+    await authorPlanOnce(
+      { skillText: 'SKILL', planKind: 'workbook', objective: 'obj', findings: [], evidence: [], dataLayout: 'Columns: A = channel' },
+      agent,
+    );
+
+    const [prompt] = (agent.generate as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(prompt).toContain('DATA SHEET LAYOUT');
+    expect(prompt).toContain('Columns: A = channel');
+  });
+
+  it('returns the candidate Mastra rejected against the schema, so validatePlan can name the errors for a retry', async () => {
+    const rejected = { title: 'Deck', slides: [{ evidenceIds: ['F4'] }] };
+    const agent = fakeAgent(() =>
+      Promise.reject(
+        Object.assign(new Error('Structured output validation failed'), {
+          id: 'STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED',
+          details: { value: JSON.stringify(rejected) },
+        }),
+      ),
+    );
+
+    const result = await authorPlanOnce({ skillText: 'SKILL', planKind: 'deck', objective: 'obj', findings: [], evidence: [] }, agent);
+
+    expect(result).toEqual(rejected);
+  });
+
+  it('still throws any other model error', async () => {
+    const agent = fakeAgent(() => Promise.reject(new Error('overloaded')));
+
+    await expect(
+      authorPlanOnce({ skillText: 'SKILL', planKind: 'deck', objective: 'obj', findings: [], evidence: [] }, agent),
+    ).rejects.toThrow('overloaded');
   });
 });
 

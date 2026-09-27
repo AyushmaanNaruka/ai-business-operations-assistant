@@ -285,6 +285,26 @@ describe('search()', () => {
     const [inputData] = executeMock.mock.calls[0]! as [{ filter: string }];
     expect(JSON.parse(inputData.filter)).toEqual({});
   });
+
+  it('filters the vector query itself to a set of allowed source ids', async () => {
+    executeMock.mockResolvedValue({ sources: [] });
+    const { search } = await import('./rag');
+    await search('pricing', { sourceIds: ['src_1', 'src_2'] });
+
+    const [inputData] = executeMock.mock.calls[0]! as [{ filter: string; topK: number }];
+    expect(JSON.parse(inputData.filter)).toEqual({ sourceId: { $in: ['src_1', 'src_2'] } });
+    expect(inputData.topK).toBe(10);
+  });
+
+  it('returns ok([]) without querying when the allowed set is empty or excludes the requested source', async () => {
+    const { search } = await import('./rag');
+    const empty = await search('pricing', { sourceIds: [] });
+    const excluded = await search('pricing', { sourceId: 'src_9', sourceIds: ['src_1'] });
+
+    expect(empty).toEqual({ ok: true, data: [] });
+    expect(excluded).toEqual({ ok: true, data: [] });
+    expect(executeMock).not.toHaveBeenCalled();
+  });
 });
 
 // Only runs against the real embedding and rerank models when a real API key

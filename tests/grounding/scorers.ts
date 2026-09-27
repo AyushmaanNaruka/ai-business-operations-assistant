@@ -1,5 +1,6 @@
 import { createScorer } from '@mastra/core/evals';
 import type { Conflict } from '@/modules/evidence';
+import { getRuntime } from '@/mastra/runtime';
 import type { SpecialistResult } from '@/types';
 
 /**
@@ -19,6 +20,24 @@ import type { SpecialistResult } from '@/types';
  * data that made it fail, so a red run names what went wrong instead of a bare
  * "expected 1, got 0" (the prompt's own requirement: "fail loudly and specifically").
  */
+
+/**
+ * The registered source ids of the sample files the shared runtime auto-loads
+ * (src/mastra/runtime.ts). A live eval must hand these to buildTask: delegate() puts the
+ * task's sourceIds on the tools' scope (D-72), and an empty list there allows nothing,
+ * so an eval passing [] would ask its specialist about tables it cannot see. Production
+ * gets the same widening from runDelegation. Throws when a sample did not load, so a
+ * red eval says so instead of reporting a gap the data never had.
+ */
+export async function sampleSourceIds(...names: string[]): Promise<string[]> {
+  const { registry } = await getRuntime();
+  const sources = registry.listSources();
+  return names.map((name) => {
+    const source = sources.find((s) => s.name === name && s.status === 'ready');
+    if (!source) throw new Error(`Sample "${name}" is not loaded and ready in the shared runtime; run the sample script first.`);
+    return source.id;
+  });
+}
 
 export type Check = { name: string; pass: boolean; detail: string };
 

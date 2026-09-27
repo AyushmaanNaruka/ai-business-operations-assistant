@@ -11,6 +11,9 @@ export type SessionSource = {
   status: SourceStatus;
   addedAt: string;
   error?: { code: string; message: string };
+  // Present once ingestion finishes (src/types/source.ts): what was actually extracted.
+  doc?: { pageCount?: number };
+  tables?: { tableName: string; rowCount: number }[];
 };
 
 export type SessionArtifact = {
@@ -47,7 +50,7 @@ type SessionFilesValue = {
 
 const SessionFilesContext = createContext<SessionFilesValue | null>(null);
 
-export const ACCEPTED_EXTENSIONS = ".xlsx,.csv,.pdf,.docx,.txt,.json";
+export const ACCEPTED_EXTENSIONS = ".xlsx,.csv,.pdf,.docx,.txt,.md,.markdown,.json";
 
 /**
  * Polling interval for the conversation's manifest. Plain polling rather than a

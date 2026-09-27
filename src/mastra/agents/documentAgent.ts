@@ -1,6 +1,6 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { MODELS } from '../models';
+import { AGENT_DEFAULT_OPTIONS, MODELS } from '../models';
 import { getDocumentTool, listDocumentsTool, recordEvidenceTool, searchDocumentsTool } from '../tools/documents';
 
 /**
@@ -94,8 +94,14 @@ Hard rules, in order:
      point is to test it against the data, and the claim text records who said it and how firmly.
    - A remark with no figure and no position ("doing well", "a solid quarter"): no "metric". Never
      invent a figure to make a claim comparable.
+
+9. Read only the sources named in the task's "sourceIds". If one of them cannot be read (it is
+   missing from list_documents, or a tool call on it fails), report that in "gaps".
+   Never substitute another document that looks like the same file (same name, a similar copy):
+   it may belong to someone else, and evidence from it would cite a source this task never had.
 `.trim(),
   model: MODELS.ANALYST,
+  defaultOptions: AGENT_DEFAULT_OPTIONS,
   memory: new Memory(),
   tools: {
     list_documents: listDocumentsTool,

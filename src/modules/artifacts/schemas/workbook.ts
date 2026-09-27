@@ -45,15 +45,17 @@ const CalculationSchema = z.object({
 
 /**
  * The authored plan for an `excel-workbook` artifact (skills/excel-workbook/SKILL.md).
- * `generatedAt` is the P6.1 addition: the Summary sheet header block now requires
- * title, client, date range, and generated-at date so "a reviewer opening the file
- * cold should not have to ask what this is or how current it is".
+ * The Summary sheet header block shows title, client, date range, and generated date
+ * so "a reviewer opening the file cold should not have to ask what this is or how
+ * current it is". The generated date is deliberately NOT a plan field: `renderXlsx`
+ * stamps it from the clock at render time, because a model guessing today's date once
+ * shipped a workbook "Generated: 2024-05-13". A stray `generatedAt` in model output is
+ * stripped by Zod's default object parsing and never reaches the file.
  */
 export const WorkbookPlanSchema = z.object({
   title: z.string(),
   preparedFor: z.string().optional(),
   dateRange: z.string().optional(),
-  generatedAt: z.string().min(1),
   summary: WorkbookSummarySchema,
   recommendations: z.array(WorkbookRecommendationSchema).min(1),
   calculations: z.array(CalculationSchema).min(1),
