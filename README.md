@@ -458,19 +458,27 @@ The full matrix, cross checked against the brief three times, is
 | Extra | Security for a shared deployment | SSRF guard, validated routes, rate limits, optional password gate, security headers | Yes |
 | Extra | Conversation history and file preview | Sidebar over Mastra Memory, Claude style preview panel | Yes |
 
-<!-- ARTIFACTS: regenerate before submit -->
 ## Generated artifacts
 
-Both produced from scenario A in `docs/08-DEMO-SCENARIOS.md`, and committed to
-`samples/generated/`:
+Both come from a live run of scenario B in `docs/08-DEMO-SCENARIOS.md` (website only:
+the user pasted `https://taplio.com/`, then asked for a summary and a client deck),
+and are committed to `samples/generated/` unedited:
 
-- **[`northwind-q3-review.pptx`](samples/generated/northwind-q3-review.pptx)**, ten
-  to twelve slides with native, editable PowerPoint charts and speaker notes on
-  every slide.
-- **[`northwind-campaign-metrics.xlsx`](samples/generated/northwind-campaign-metrics.xlsx)**,
-  five sheets (Summary, Recommendations, Data, Calculations, Sources) with live
-  formulas in Calculations and recommendations linked to their supporting rows in
-  Data.
+- **[`taplio-research-summary.docx`](samples/generated/taplio-research-summary.docx)**,
+  a summary document: situation, three findings with inline evidence ids, a
+  recommendation, a "What we could not determine" section, and a Sources table
+  giving each evidence id with its page URL.
+- **[`taplio-client-presentation.pptx`](samples/generated/taplio-client-presentation.pptx)**,
+  a five slide client deck with message titles, a native, editable PowerPoint chart
+  of the pricing tiers, a source footer on every slide and speaker notes on every
+  slide.
+
+They were produced on 27 Sep 2026 on the free fallback models (Gemini and Groq),
+so the writing is plainer than on Claude. They predate D-79, so the docx repeats a
+few citations and the deck has no closing Sources slide; the current code
+de-duplicates citations and adds that slide. A scenario A workbook and deck (from
+`samples/campaigns.xlsx`) were not regenerated for submission because the free
+tier daily quota was spent; run scenario A to produce them.
 
 ## Demo
 

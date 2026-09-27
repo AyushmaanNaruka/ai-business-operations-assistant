@@ -110,7 +110,7 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 | Deliverable | Where | Done |
 |---|---|---|
 | Working application | The repo, one setup command | [ ] partial: `tsc --noEmit` clean, `npm test` 704/704 green, and every phase's "Demonstrable" milestone through Saturday holds; but the build plan's own Sunday item "fresh clone test: does `10-SETUP.md` actually work from zero" has not been run yet, and after `npm install` the chat UI is one command (`npm run dev --workspace app`; Mastra Studio is an optional second process) |
-| GitHub repository | Clean history, conventional commits | [ ] partial: history so far is clean and conventional (`feat:`, `fix:`, `docs:`); as of this audit there are uncommitted working-tree changes (this session's D-60/D-61 work and this matrix edit) still to be committed and pushed |
+| GitHub repository | Clean history, conventional commits | [x] public, conventional commits (`feat:`, `fix:`, `docs:`), everything through D-79 pushed to `main` on 28 Sep 2026 |
 | README: architecture | Section 1 of README.md | [x] real prose, not a placeholder (confirmed by reading it; README.md is 495 lines, rewritten tonight per the c48eeb1/1aab380 commits) |
 | README: key design decisions | Section 2, drawn from DECISIONS.md | [x] real prose, four decisions plus a "behind those four" paragraph, drawn from DECISIONS.md as specified |
 | README: how the multi agent system works | Section 3 | [x] real prose, including the `SpecialistTask`/`SpecialistResult` contract and the parallel-vs-sequential delegation explanation |
@@ -118,7 +118,7 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 | README: how generated artifacts are created | Section 5 | [x] real prose |
 | README: important trade offs | Section 6, the hardest section, written incrementally | [x] real prose, a ten row trade-off table plus two worked defences |
 | Short demonstration, realistic scenario | `docs/08-DEMO-SCENARIOS.md`, recorded | [x] `docs/media/demo.mp4`, `demo-teaser.gif` and `demo-poster.png` exist and are committed (commit c48eeb1) and embedded in the README; note per D-59 this is a Remotion redraw of the UI with figures computed from `samples/campaigns.xlsx`, not a screen capture of the live app — a deliberate, documented choice, not a live recording |
-| At least two generated artifacts | Scenario A produces a deck and a workbook, committed to `samples/generated/` | [ ] confirmed still open: `samples/generated/` contains only a placeholder `README.md` naming the two files (`northwind-q3-review.pptx`, `northwind-campaign-metrics.xlsx`); neither file exists yet |
+| At least two generated artifacts | Committed to `samples/generated/` | [x] `taplio-research-summary.docx` and `taplio-client-presentation.pptx` from a live scenario B run on free models (27 Sep 2026). A scenario A workbook and deck from `samples/campaigns.xlsx` were not regenerated because the free tier daily quota was spent; both predate D-79 |
 
 ---
 
@@ -128,9 +128,9 @@ No gap against the brief's requirements is left undesigned: everything in sectio
 
 **Open**
 
-1. **Generated artifacts not committed.** `samples/generated/` holds only its README; `northwind-q3-review.pptx` and `northwind-campaign-metrics.xlsx` still have to be produced from scenario A and committed (section I).
+1. **Scenario A artifacts not regenerated.** The committed samples are the scenario B summary and deck. A scenario A workbook and deck need a live run with quota (a paid key, or the free tier the next day); they predate D-79, so the docx repeats a few citations and the deck has no Sources slide (section I).
 2. **Fresh clone test not run.** `docs/10-SETUP.md` has been rewritten for a clean clone but not yet followed from zero on a second machine (section I, "Working application").
-3. **Uncommitted work.** The working tree carries changes not yet committed and pushed (section I, "GitHub repository").
+3. **Demo is an animation.** `docs/media/demo.mp4` is a Remotion reconstruction, not a screen recording of the live app (D-59).
 4. **Live grounding evals depend on quota.** The four evals in `tests/grounding/` make real model calls and run only through `npm run eval`, not `npm test`. The missing metric and contradiction evals have passed live on Claude (D-66, D-67); on the free tier they can fail for quota reasons, not grounding reasons (R6, E9).
 5. **Free tier limits.** On 26 Sep 2026 the free tier for gemini-2.5-flash was measured at 20 requests a day. The fallback chain (Gemini Flash, Flash Lite, Groq) softens this, and a paid Anthropic or OpenAI key removes it (D-53, D-54). A full scenario A run on free keys alone does not complete in one day.
 6. **Specialist gaps can be dropped on a failed extraction.** Since D-66 a specialist answers in free text and its `SpecialistResult` is assembled in code, which replaced the structured output path behind the Groq parse failures of D-60 and D-62. The remaining edge: if the small extraction call fails, the answer is returned with no `gaps`, so a gap can be stated in the answer text but missing from `openGaps`.
