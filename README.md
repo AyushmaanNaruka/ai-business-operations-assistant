@@ -482,7 +482,11 @@ tier daily quota was spent; run scenario A to produce them.
 
 ## Demo
 
-**The video is an animated reconstruction, not a screen recording of the live app.** It redraws the chat UI in Remotion from the app's own layout, with every figure computed from `samples/campaigns.xlsx` (D-59). A recording was not used because free tier rate limits made live answers unreliable on cue. To see the real app, follow Quick start and run scenario A yourself.
+Two videos, for two different honesty trade-offs:
+
+**[Live walkthrough (MP4, 23 seconds, real screen captures, no sound)](docs/media/live-walkthrough.mp4)** — an actual run of the app on 28 Sep 2026: the real chat UI on `localhost:3000`, the four scenario A files uploaded and ingested (row counts and PDF tables extracted live, not scripted), and a real analysis request. That request came back with an honest rate-limit message, because the free-tier daily quota (Gemini) and per-minute quota (Groq) were both spent by the time of recording — itself a real instance of the error handling the brief asks about, not a staged failure. With a paid key, or the free tier on a later day, the same request returns a grounded answer; nothing about the failure is scripted.
+
+**The video below is an animated reconstruction, not a screen recording.** It redraws the chat UI in Remotion from the app's own layout, with every figure computed from `samples/campaigns.xlsx` (D-59), so it can show what a full, quota-unconstrained run of scenario A looks like end to end.
 
 **[Watch the product video (MP4, 80 seconds, with sound)](docs/media/demo.mp4)**
 

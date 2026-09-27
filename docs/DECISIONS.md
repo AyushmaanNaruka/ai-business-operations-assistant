@@ -579,3 +579,10 @@ Date, one line of context
 **Over:** Leaving the unit tests as they were.
 **Because:** a fresh clone with no `.env` failed all 7 non-live tests in this file. `ModelRouterEmbeddingModel`'s constructor resolves a provider client and validates its API key eagerly, so `new ModelRouterEmbeddingModel(EMBEDDING_MODEL_ID)` (rag.ts's `model:` argument) threw before the mocked `embedMany` ever ran, and `getRelevanceScorer()` did the same for `ModelRouterLanguageModel`. The dev machine's `.env` had hidden this for the whole project: a "unit" test that silently depends on a real key contradicts AGENTS.md's own rule that modules are testable without a model.
 **Cost:** none found; the two classes are now stubbed the same way the vector store and rerank client already were.
+
+## D-81 A short, real screen-captured walkthrough sits alongside the animated demo
+28 Sep 2026, submission audit, `docs/media/live-walkthrough.mp4`.
+**Chose:** A 23 second, silent video built from real screenshots of an actual run: the chat UI, real file ingestion (row counts and PDF table extraction happening live), and one real analysis request. The request returned an honest rate-limit message because the free tier's daily (Gemini) and per-minute (Groq) quotas were both spent, and that message is shown as-is rather than retried until it looks better.
+**Over:** Only the Remotion animation, or waiting for quota to reset past the deadline to record a full success.
+**Because:** the animation is disclosed as a reconstruction (D-59); this gives a reviewer at least one clip of the real, unscripted app, including what its rate-limit handling actually looks like under load.
+**Cost:** it does not show a completed analysis, artifact generation, or sound; the fuller Remotion video still carries that part of the demonstration.
