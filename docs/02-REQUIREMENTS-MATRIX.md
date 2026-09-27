@@ -109,7 +109,7 @@ Legend: **Spec** means designed and specified. **Build** means it exists in code
 
 | Deliverable | Where | Done |
 |---|---|---|
-| Working application | The repo, one setup command | [ ] partial: `tsc --noEmit` clean, `npm test` 704/704 green, and every phase's "Demonstrable" milestone through Saturday holds; but the build plan's own Sunday item "fresh clone test: does `10-SETUP.md` actually work from zero" has not been run yet, and after `npm install` the chat UI is one command (`npm run dev --workspace app`; Mastra Studio is an optional second process) |
+| Working application | The repo, one setup command | [x] confirmed 28 Sep 2026: `git clone` into a clean directory, one root `npm install`, `tsc --noEmit` clean, `npm test` 704/704 green, `next build` compiles, no manual steps beyond `.env`; after `npm install` the chat UI is one command (`npm run dev --workspace app`; Mastra Studio is an optional second process) |
 | GitHub repository | Clean history, conventional commits | [x] public, conventional commits (`feat:`, `fix:`, `docs:`), everything through D-79 pushed to `main` on 28 Sep 2026 |
 | README: architecture | Section 1 of README.md | [x] real prose, not a placeholder (confirmed by reading it; README.md is 495 lines, rewritten tonight per the c48eeb1/1aab380 commits) |
 | README: key design decisions | Section 2, drawn from DECISIONS.md | [x] real prose, four decisions plus a "behind those four" paragraph, drawn from DECISIONS.md as specified |
@@ -129,12 +129,13 @@ No gap against the brief's requirements is left undesigned: everything in sectio
 **Open**
 
 1. **Scenario A artifacts not regenerated.** The committed samples are the scenario B summary and deck. A scenario A workbook and deck need a live run with quota (a paid key, or the free tier the next day); they predate D-79, so the docx repeats a few citations and the deck has no Sources slide (section I).
-2. **Fresh clone test not run.** `docs/10-SETUP.md` has been rewritten for a clean clone but not yet followed from zero on a second machine (section I, "Working application").
-3. **Demo is an animation.** `docs/media/demo.mp4` is a Remotion reconstruction, not a screen recording of the live app (D-59).
-4. **Live grounding evals depend on quota.** The four evals in `tests/grounding/` make real model calls and run only through `npm run eval`, not `npm test`. The missing metric and contradiction evals have passed live on Claude (D-66, D-67); on the free tier they can fail for quota reasons, not grounding reasons (R6, E9).
-5. **Free tier limits.** On 26 Sep 2026 the free tier for gemini-2.5-flash was measured at 20 requests a day. The fallback chain (Gemini Flash, Flash Lite, Groq) softens this, and a paid Anthropic or OpenAI key removes it (D-53, D-54). A full scenario A run on free keys alone does not complete in one day.
-6. **Specialist gaps can be dropped on a failed extraction.** Since D-66 a specialist answers in free text and its `SpecialistResult` is assembled in code, which replaced the structured output path behind the Groq parse failures of D-60 and D-62. The remaining edge: if the small extraction call fails, the answer is returned with no `gaps`, so a gap can be stated in the answer text but missing from `openGaps`.
+2. **Demo is an animation.** `docs/media/demo.mp4` is a Remotion reconstruction, not a screen recording of the live app (D-59).
+3. **Live grounding evals depend on quota.** The four evals in `tests/grounding/` make real model calls and run only through `npm run eval`, not `npm test`. The missing metric and contradiction evals have passed live on Claude (D-66, D-67); on the free tier they can fail for quota reasons, not grounding reasons (R6, E9).
+4. **Free tier limits.** On 26 Sep 2026 the free tier for gemini-2.5-flash was measured at 20 requests a day. The fallback chain (Gemini Flash, Flash Lite, Groq) softens this, and a paid Anthropic or OpenAI key removes it (D-53, D-54). A full scenario A run on free keys alone does not complete in one day.
+5. **Specialist gaps can be dropped on a failed extraction.** Since D-66 a specialist answers in free text and its `SpecialistResult` is assembled in code, which replaced the structured output path behind the Groq parse failures of D-60 and D-62. The remaining edge: if the small extraction call fails, the answer is returned with no `gaps`, so a gap can be stated in the answer text but missing from `openGaps`.
 
 **Resolved**
 
 - **Time.** The artifact renderers were the most likely thing to run late. Resolved on 27 Sep (P8.4 audit): xlsx, pptx, docx and pdf renderers all shipped; nothing was cut.
+- **Fresh clone test.** Resolved 28 Sep: cloned into a clean directory, one `npm install`, tests, typecheck and `next build` all pass with no manual steps beyond `.env`. Along the way, `rag.test.ts` turned out to depend on a real provider key being present (D-80); fixed and pushed.
+- **Uncommitted work.** Resolved 28 Sep: everything through D-80 is committed and pushed to `main`.
